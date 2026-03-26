@@ -1,102 +1,62 @@
 // =====================================================
 // PolskaMapper — Main Application (MapLibre GL v5)
-// Google Maps-style 3D: real buildings, terrain, sky
+// Google Maps-style 3D — vector tiles, real buildings
 // =====================================================
 
 (function () {
     'use strict';
 
-    // ─── Tile sources ────────────────────────────────
-    var TERRAIN_TILES = 'https://demotiles.maplibre.org/terrain-tiles/tiles.json';
-    var OFM_STYLE_BRIGHT = 'https://tiles.openfreemap.org/styles/bright';
-    var OFM_PLANET = 'https://tiles.openfreemap.org/planet';
+    // ─── OpenFreeMap vector styles (real roads, labels, buildings, parks) ───
+    var OFM_DARK    = 'https://tiles.openfreemap.org/styles/dark';
+    var OFM_LIBERTY = 'https://tiles.openfreemap.org/styles/liberty';
+    var OFM_PLANET  = 'https://tiles.openfreemap.org/planet';
+    var TERRAIN_URL = 'https://demotiles.maplibre.org/terrain-tiles/tiles.json';
 
-    // For dark & satellite we build a raster style with OFM vector overlay
-    function buildRasterStyle(variant) {
-        var rasterSource;
-        if (variant === 'dark') {
-            rasterSource = {
-                type: 'raster',
-                tiles: [
-                    'https://a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png',
-                    'https://b.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png',
-                    'https://c.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png'
-                ],
-                tileSize: 256,
-                attribution: '&copy; CARTO, &copy; OpenStreetMap',
-                maxzoom: 19
-            };
-        } else {
-            rasterSource = {
-                type: 'raster',
-                tiles: [
-                    'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'
-                ],
-                tileSize: 256,
-                attribution: '&copy; Esri',
-                maxzoom: 18
-            };
-        }
-
+    // Satellite needs a custom raster style + OFM vector overlay
+    function buildSatelliteStyle() {
         return {
             version: 8,
-            name: variant,
-            glyphs: 'https://demotiles.maplibre.org/font/{fontstack}/{range}.pbf',
+            name: 'satellite',
+            glyphs: 'https://tiles.openfreemap.org/fonts/{fontstack}/{range}.pbf',
+            sprite: 'https://tiles.openfreemap.org/sprites/ofm_f384/ofm',
             sources: {
-                'base-tiles': rasterSource,
+                'satellite-tiles': {
+                    type: 'raster',
+                    tiles: ['https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'],
+                    tileSize: 256,
+                    attribution: '&copy; Esri',
+                    maxzoom: 18
+                },
                 'terrainSource': {
                     type: 'raster-dem',
-                    url: TERRAIN_TILES,
+                    url: TERRAIN_URL,
                     tileSize: 256
                 },
                 'hillshadeSource': {
                     type: 'raster-dem',
-                    url: TERRAIN_TILES,
+                    url: TERRAIN_URL,
                     tileSize: 256
                 },
-                'openfreemap': {
+                'openmaptiles': {
                     type: 'vector',
                     url: OFM_PLANET
                 }
             },
             layers: [
+                { id: 'background', type: 'background', paint: { 'background-color': '#1a1a2e' } },
+                { id: 'satellite-tiles', type: 'raster', source: 'satellite-tiles' },
                 {
-                    id: 'background',
-                    type: 'background',
+                    id: 'hillshade', type: 'hillshade', source: 'hillshadeSource',
                     paint: {
-                        'background-color': variant === 'dark' ? '#0D1117' : '#1a1a2e'
-                    }
-                },
-                {
-                    id: 'base-tiles',
-                    type: 'raster',
-                    source: 'base-tiles'
-                },
-                {
-                    id: 'hillshade',
-                    type: 'hillshade',
-                    source: 'hillshadeSource',
-                    layout: { visibility: 'visible' },
-                    paint: {
-                        'hillshade-shadow-color': variant === 'dark' ? '#000000' : '#473B24',
-                        'hillshade-highlight-color': variant === 'dark' ? '#222244' : '#ffffff',
-                        'hillshade-accent-color': variant === 'dark' ? '#1a1a3e' : '#5a5a5a',
+                        'hillshade-shadow-color': '#473B24',
+                        'hillshade-highlight-color': '#ffffff',
+                        'hillshade-accent-color': '#5a5a5a',
                         'hillshade-exaggeration': 0.5
                     }
                 }
             ],
-            terrain: {
-                source: 'terrainSource',
-                exaggeration: 1.5
-            },
-            sky: variant === 'dark' ? {
-                'sky-color': '#0D1117',
-                'sky-horizon-blend': 0.5,
-                'horizon-color': '#1a1a3e',
-                'horizon-fog-blend': 0.8,
-                'fog-color': '#0D1117',
-                'fog-ground-blend': 0.1
-            } : {
+            terrain: { source: 'terrainSource', exaggeration: 1.5 },
+            sky: {
                 'sky-color': '#1a6fd4',
                 'sky-horizon-blend': 0.4,
                 'horizon-color': '#8fc8f8',
@@ -108,7 +68,7 @@
     }
 
     var POLAND_CENTER = [19.4, 51.9];
-    var INITIAL_ZOOM = 6.2;
+    var INITIAL_ZOOM  = 6.2;
     var INITIAL_PITCH = 55;
     var INITIAL_BEARING = -15;
 
@@ -126,7 +86,6 @@
     // ─── Helpers ─────────────────────────────────────
     function qs(sel) { return document.querySelector(sel); }
     function qsa(sel) { return document.querySelectorAll(sel); }
-
     function fmt(n) {
         if (n >= 1e6) return (n / 1e6).toFixed(1) + 'M';
         if (n >= 1e3) return (n / 1e3).toFixed(0) + 'K';
@@ -172,15 +131,21 @@
         return cities;
     }
 
+    // ─── Get the style URL/object for a mode ─────────
+    function getStyleForMode(mode) {
+        if (mode === 'dark') return OFM_DARK;
+        if (mode === 'light') return OFM_LIBERTY;
+        return buildSatelliteStyle(); // satellite
+    }
+
     // ═════════════════════════════════════════════════
     // MAP INIT
     // ═════════════════════════════════════════════════
     function initMap() {
         setLoading(20);
-
         map = new maplibregl.Map({
             container: 'map',
-            style: buildRasterStyle('dark'),
+            style: OFM_DARK,
             center: POLAND_CENTER,
             zoom: INITIAL_ZOOM,
             pitch: INITIAL_PITCH,
@@ -194,18 +159,11 @@
             trackResize: true,
             canvasContextAttributes: { antialias: true }
         });
-
         setLoading(40);
 
         map.on('load', function () {
             setLoading(60);
-            addBorder();
-            setLoading(65);
-            add3DBuildings();
-            setLoading(80);
-            addHeatCircles();
-            setLoading(85);
-            syncMarkers();
+            onStyleReady();
             setLoading(95);
             hideLoading();
             animateStats();
@@ -218,21 +176,90 @@
         });
     }
 
+    // ─── Called after every style load ────────────────
+    function onStyleReady() {
+        ensureTerrain();
+        addBorder();
+        add3DBuildings();
+        addHeatCircles();
+        syncMarkers();
+    }
+
+    // ─── Add terrain + sky to any style ──────────────
+    function ensureTerrain() {
+        // Add terrain source if missing (vector styles don't include it)
+        if (!map.getSource('terrainSource')) {
+            map.addSource('terrainSource', {
+                type: 'raster-dem', url: TERRAIN_URL, tileSize: 256
+            });
+        }
+        if (!map.getSource('hillshadeSource')) {
+            map.addSource('hillshadeSource', {
+                type: 'raster-dem', url: TERRAIN_URL, tileSize: 256
+            });
+        }
+        // Hillshade layer (insert below labels for vector styles)
+        if (!map.getLayer('custom-hillshade')) {
+            var isDark = (currentStyle === 'dark');
+            var before = getFirstSymbolLayer();
+            map.addLayer({
+                id: 'custom-hillshade', type: 'hillshade', source: 'hillshadeSource',
+                paint: {
+                    'hillshade-shadow-color': isDark ? '#000000' : '#473B24',
+                    'hillshade-highlight-color': isDark ? '#111122' : '#ffffff',
+                    'hillshade-accent-color': isDark ? '#0a0a1e' : '#5a5a5a',
+                    'hillshade-exaggeration': 0.4
+                }
+            }, before);
+        }
+        // Enable 3D terrain
+        if (is3D) {
+            try { map.setTerrain({ source: 'terrainSource', exaggeration: 1.5 }); } catch (e) {}
+        }
+        // Sky
+        var isDark2 = (currentStyle === 'dark');
+        var isSat = (currentStyle === 'satellite');
+        try {
+            map.setSky(isDark2 ? {
+                'sky-color': '#0D1117',
+                'sky-horizon-blend': 0.5,
+                'horizon-color': '#1a1a3e',
+                'horizon-fog-blend': 0.8,
+                'fog-color': '#0D1117',
+                'fog-ground-blend': 0.1
+            } : isSat ? {
+                'sky-color': '#1a6fd4',
+                'sky-horizon-blend': 0.4,
+                'horizon-color': '#8fc8f8',
+                'horizon-fog-blend': 0.6,
+                'fog-color': '#c8dff0',
+                'fog-ground-blend': 0.05
+            } : {
+                'sky-color': '#6bb8f7',
+                'sky-horizon-blend': 0.4,
+                'horizon-color': '#c8e0f8',
+                'horizon-fog-blend': 0.5,
+                'fog-color': '#e8f0f8',
+                'fog-ground-blend': 0.05
+            });
+        } catch (e) {}
+    }
+
     // ─── Poland Border ───────────────────────────────
     function addBorder() {
         if (map.getSource('pl-border')) return;
         map.addSource('pl-border', { type: 'geojson', data: POLAND_BORDER });
         map.addLayer({
             id: 'pl-fill', type: 'fill', source: 'pl-border',
-            paint: { 'fill-color': '#E63946', 'fill-opacity': 0.05 }
+            paint: { 'fill-color': '#E63946', 'fill-opacity': 0.04 }
         });
         map.addLayer({
             id: 'pl-line', type: 'line', source: 'pl-border',
-            paint: { 'line-color': '#E63946', 'line-width': 2.5, 'line-opacity': 0.7 }
+            paint: { 'line-color': '#E63946', 'line-width': 2, 'line-opacity': 0.6 }
         });
     }
 
-    // ─── Find the first symbol layer (to insert 3D below labels) ───
+    // ─── Find first symbol layer (to insert below labels) ───
     function getFirstSymbolLayer() {
         var layers = map.getStyle().layers || [];
         for (var i = 0; i < layers.length; i++) {
@@ -241,62 +268,57 @@
         return undefined;
     }
 
-    // ─── Find vector source name (differs between OFM style and custom) ───
+    // ─── Find the vector source name ─────────────────
     function getVectorSourceName() {
-        var style = map.getStyle();
-        // In our raster styles we explicitly name it 'openfreemap'
-        if (style.sources['openfreemap']) return 'openfreemap';
-        // In OFM bright style, find the first vector source
-        var keys = Object.keys(style.sources);
+        var sources = map.getStyle().sources;
+        // OFM styles name it 'openmaptiles'
+        if (sources['openmaptiles'] && sources['openmaptiles'].type === 'vector') return 'openmaptiles';
+        // Our custom satellite style also names it 'openmaptiles'
+        if (sources['openfreemap'] && sources['openfreemap'].type === 'vector') return 'openfreemap';
+        // Fallback: find first vector source
+        var keys = Object.keys(sources);
         for (var i = 0; i < keys.length; i++) {
-            if (style.sources[keys[i]].type === 'vector') return keys[i];
+            if (sources[keys[i]].type === 'vector') return keys[i];
         }
-        return 'openfreemap';
+        return 'openmaptiles';
     }
 
-    // ─── 3D Buildings from OpenFreeMap (real buildings!) ──
+    // ─── 3D Buildings (real buildings from OpenStreetMap data) ──
     function add3DBuildings() {
+        // Liberty style already has 'building-3d' layer — just make sure it exists
+        if (currentStyle === 'light' && map.getLayer('building-3d')) {
+            return; // already has 3D buildings built into the style
+        }
         if (map.getLayer('3d-buildings')) return;
 
         var isDark = (currentStyle === 'dark');
         var isSat = (currentStyle === 'satellite');
-        var isLight = (currentStyle === 'light');
-        var sourceName = getVectorSourceName();
-        var beforeLayer = isLight ? getFirstSymbolLayer() : undefined;
+        var srcName = getVectorSourceName();
+        var before = getFirstSymbolLayer();
 
         map.addLayer({
             id: '3d-buildings',
-            source: sourceName,
+            source: srcName,
             'source-layer': 'building',
             type: 'fill-extrusion',
-            minzoom: 13,
+            minzoom: 14,
             filter: ['!=', ['get', 'hide_3d'], true],
             paint: {
-                'fill-extrusion-color': [
-                    'interpolate', ['linear'], ['get', 'render_height'],
-                    0, isDark ? '#1a1a3e' : isSat ? '#aab8c2' : '#ddd9d0',
-                    20, isDark ? '#252555' : isSat ? '#b8c4cc' : '#d4d0c7',
-                    50, isDark ? '#2a2a5e' : isSat ? '#c0ccd5' : '#cbc7be',
-                    100, isDark ? '#3a3a7e' : isSat ? '#c8d4dd' : '#c0bcb3',
-                    200, isDark ? '#5a5aae' : isSat ? '#d0dce5' : '#b5b1a8'
-                ],
-                'fill-extrusion-height': [
-                    'interpolate', ['linear'], ['zoom'],
-                    13, 0,
-                    14, ['get', 'render_height']
-                ],
-                'fill-extrusion-base': [
-                    'case',
-                    ['>=', ['get', 'zoom'], 16],
-                    ['get', 'render_min_height'],
-                    0
-                ],
-                'fill-extrusion-opacity': isDark ? 0.75 : 0.85
+                'fill-extrusion-color': isDark
+                    ? ['interpolate', ['linear'], ['get', 'render_height'],
+                        0, '#1c1c28', 20, '#222234', 50, '#282844', 100, '#303060', 200, '#383878']
+                    : isSat
+                    ? ['interpolate', ['linear'], ['get', 'render_height'],
+                        0, '#b8c4cc', 20, '#c0ccd5', 50, '#c8d4dd', 100, '#d0dce5', 200, '#d8e4ed']
+                    : 'hsl(35,8%,85%)',
+                'fill-extrusion-height': ['get', 'render_height'],
+                'fill-extrusion-base': ['get', 'render_min_height'],
+                'fill-extrusion-opacity': 0.8
             }
-        }, beforeLayer);
+        }, before);
     }
 
-    // ─── Heat circles ────────────────────────────────
+    // ─── Heat circles (population glow) ──────────────
     function addHeatCircles() {
         if (map.getSource('heat')) return;
         var fc = {
@@ -314,9 +336,9 @@
             id: 'heat-glow', type: 'circle', source: 'heat',
             paint: {
                 'circle-radius': ['interpolate', ['linear'], ['get', 'population'],
-                    100000, 20, 500000, 35, 1000000, 50, 2000000, 70],
+                    100000, 18, 500000, 32, 1000000, 45, 2000000, 65],
                 'circle-color': '#E63946',
-                'circle-opacity': 0.08,
+                'circle-opacity': 0.07,
                 'circle-blur': 1
             }
         });
@@ -329,97 +351,26 @@
         var startTime = performance.now();
         var duration = 6000;
         var targetBearing = startBearing + 25;
-
         function animate(now) {
             var p = Math.min((now - startTime) / duration, 1);
             var eased = 1 - Math.pow(1 - p, 3);
             map.setBearing(startBearing + (targetBearing - startBearing) * eased);
-            if (p < 1) {
-                rotateAnimId = requestAnimationFrame(animate);
-            } else {
-                rotateAnimId = null;
-            }
+            if (p < 1) { rotateAnimId = requestAnimationFrame(animate); }
+            else { rotateAnimId = null; }
         }
         rotateAnimId = requestAnimationFrame(animate);
-
         map.once('mousedown', function () { if (rotateAnimId) { cancelAnimationFrame(rotateAnimId); rotateAnimId = null; } });
         map.once('touchstart', function () { if (rotateAnimId) { cancelAnimationFrame(rotateAnimId); rotateAnimId = null; } });
     }
 
-    // ─── Remove custom layers before style change ────
+    // ─── Remove custom layers (before style change) ──
     function removeCustomLayers() {
-        ['3d-buildings', 'heat-glow', 'pl-line', 'pl-fill'].forEach(function (id) {
-            try { if (map.getLayer(id)) map.removeLayer(id); } catch (e) { }
+        ['3d-buildings', 'custom-hillshade', 'heat-glow', 'pl-line', 'pl-fill'].forEach(function (id) {
+            try { if (map.getLayer(id)) map.removeLayer(id); } catch (e) {}
         });
-        ['heat', 'pl-border'].forEach(function (id) {
-            try { if (map.getSource(id)) map.removeSource(id); } catch (e) { }
+        ['heat', 'pl-border', 'terrainSource', 'hillshadeSource'].forEach(function (id) {
+            try { if (map.getSource(id)) map.removeSource(id); } catch (e) {}
         });
-    }
-
-    // ─── Get style for mode ──────────────────────────
-    // Light = OpenFreeMap vector style (Google Maps-like with roads, labels, parks)
-    // Dark = CARTO dark raster + OFM buildings
-    // Satellite = Esri satellite raster + OFM buildings
-    function getStyleForMode(mode) {
-        if (mode === 'light') {
-            return OFM_STYLE_BRIGHT;
-        }
-        return buildRasterStyle(mode);
-    }
-
-    // ─── After any style loads, add terrain + custom layers ──
-    function onStyleLoaded() {
-        // For light (OFM vector) style, add terrain/hillshade sources + sky
-        if (currentStyle === 'light') {
-            if (!map.getSource('terrainSource')) {
-                map.addSource('terrainSource', {
-                    type: 'raster-dem',
-                    url: TERRAIN_TILES,
-                    tileSize: 256
-                });
-            }
-            if (!map.getSource('hillshadeSource')) {
-                map.addSource('hillshadeSource', {
-                    type: 'raster-dem',
-                    url: TERRAIN_TILES,
-                    tileSize: 256
-                });
-            }
-            if (!map.getLayer('hillshade')) {
-                map.addLayer({
-                    id: 'hillshade',
-                    type: 'hillshade',
-                    source: 'hillshadeSource',
-                    layout: { visibility: 'visible' },
-                    paint: {
-                        'hillshade-shadow-color': '#473B24',
-                        'hillshade-highlight-color': '#ffffff',
-                        'hillshade-accent-color': '#5a5a5a',
-                        'hillshade-exaggeration': 0.5
-                    }
-                }, getFirstSymbolLayer());
-            }
-            if (is3D) {
-                try { map.setTerrain({ source: 'terrainSource', exaggeration: 1.5 }); } catch (e) { }
-            }
-            map.setSky({
-                'sky-color': '#6bb8f7',
-                'sky-horizon-blend': 0.4,
-                'horizon-color': '#c8e0f8',
-                'horizon-fog-blend': 0.5,
-                'fog-color': '#e8f0f8',
-                'fog-ground-blend': 0.05
-            });
-        }
-
-        addBorder();
-        add3DBuildings();
-        addHeatCircles();
-        syncMarkers();
-
-        if (is3D) {
-            try { map.setTerrain({ source: 'terrainSource', exaggeration: 1.5 }); } catch (e) { }
-        }
     }
 
     // ─── Markers ─────────────────────────────────────
@@ -542,7 +493,6 @@
 
     function initAllHandlers() {
 
-        // ── City list click (delegated) ──────────────
         qs('#cityList').addEventListener('click', function (e) {
             var card = e.target.closest('.city-card');
             if (!card) return;
@@ -550,7 +500,6 @@
             if (city) selectCity(city);
         });
 
-        // ── Filter buttons ───────────────────────────
         qsa('.filter-btn').forEach(function (btn) {
             btn.addEventListener('click', function () {
                 qsa('.filter-btn').forEach(function (b) { b.classList.remove('filter-btn--active'); });
@@ -561,56 +510,38 @@
             });
         });
 
-        // ── Sort select ──────────────────────────────
         qs('#sortSelect').addEventListener('change', function () {
             currentSort = this.value;
             renderCityList();
         });
 
-        // ── Search input ─────────────────────────────
         var searchTimer;
         qs('#searchInput').addEventListener('input', function () {
             clearTimeout(searchTimer);
-            searchTimer = setTimeout(function () {
-                renderCityList();
-                syncMarkers();
-            }, 300);
+            searchTimer = setTimeout(function () { renderCityList(); syncMarkers(); }, 300);
         });
 
-        // ── Zoom In ──────────────────────────────────
-        qs('#zoomIn').addEventListener('click', function () {
-            map.zoomIn({ duration: 400 });
-        });
+        qs('#zoomIn').addEventListener('click', function () { map.zoomIn({ duration: 400 }); });
+        qs('#zoomOut').addEventListener('click', function () { map.zoomOut({ duration: 400 }); });
 
-        // ── Zoom Out ─────────────────────────────────
-        qs('#zoomOut').addEventListener('click', function () {
-            map.zoomOut({ duration: 400 });
-        });
-
-        // ── 3D / Rotate toggle ───────────────────────
         qs('#rotateBtn').addEventListener('click', function () {
             is3D = !is3D;
             if (is3D) {
                 map.easeTo({ pitch: 55, bearing: map.getBearing() - 15, duration: 1200 });
-                try { map.setTerrain({ source: 'terrainSource', exaggeration: 1.5 }); } catch (e) { }
+                try { map.setTerrain({ source: 'terrainSource', exaggeration: 1.5 }); } catch (e) {}
             } else {
                 map.easeTo({ pitch: 0, bearing: 0, duration: 1200 });
-                try { map.setTerrain(null); } catch (e) { }
+                try { map.setTerrain(null); } catch (e) {}
             }
             this.style.color = is3D ? '#E63946' : '';
         });
 
-        // ── Reset view ───────────────────────────────
         qs('#resetBtn').addEventListener('click', function () {
             closePopup();
             is3D = true;
             qs('#rotateBtn').style.color = '';
-            try { map.setTerrain({ source: 'terrainSource', exaggeration: 1.5 }); } catch (e) { }
-            map.flyTo({
-                center: POLAND_CENTER, zoom: INITIAL_ZOOM,
-                pitch: INITIAL_PITCH, bearing: INITIAL_BEARING,
-                duration: 2000
-            });
+            try { map.setTerrain({ source: 'terrainSource', exaggeration: 1.5 }); } catch (e) {}
+            map.flyTo({ center: POLAND_CENTER, zoom: INITIAL_ZOOM, pitch: INITIAL_PITCH, bearing: INITIAL_BEARING, duration: 2000 });
         });
 
         // ── Style switcher ───────────────────────────
@@ -622,31 +553,21 @@
                 btn.classList.add('style-btn--active');
                 currentStyle = s;
 
-                var cam = {
-                    center: map.getCenter(),
-                    zoom: map.getZoom(),
-                    pitch: map.getPitch(),
-                    bearing: map.getBearing()
-                };
-
+                var cam = { center: map.getCenter(), zoom: map.getZoom(), pitch: map.getPitch(), bearing: map.getBearing() };
                 removeCustomLayers();
                 clearMarkers();
                 map.setStyle(getStyleForMode(s));
 
                 map.once('style.load', function () {
                     map.jumpTo(cam);
-                    onStyleLoaded();
+                    onStyleReady();
                 });
             });
         });
 
-        // ── Close popup button ───────────────────────
         qs('#closePopup').addEventListener('click', function () { closePopup(); });
-
-        // ── Fly to city button ───────────────────────
         qs('#flyToCity').addEventListener('click', function () { if (activeCity) flyTo(activeCity); });
 
-        // ── Language toggle (RU / PL) ────────────────
         qs('#langBtn').addEventListener('click', function () {
             currentLang = currentLang === 'ru' ? 'pl' : 'ru';
             this.querySelector('span').textContent = currentLang.toUpperCase();
@@ -654,7 +575,6 @@
             syncMarkers();
         });
 
-        // ── Nav links ────────────────────────────────
         var navSections = ['map', 'cities', 'realty', 'analytics'];
         qsa('.nav__link').forEach(function (link, idx) {
             link.addEventListener('click', function (e) {
@@ -666,7 +586,6 @@
             });
         });
 
-        // ── Logo click — reset everything ────────────
         qs('.logo').addEventListener('click', function (e) {
             e.preventDefault();
             qsa('.nav__link').forEach(function (l) { l.classList.remove('nav__link--active'); });
@@ -683,23 +602,17 @@
             closePopup();
             is3D = true;
             qs('#rotateBtn').style.color = '';
-            try { map.setTerrain({ source: 'terrainSource', exaggeration: 1.5 }); } catch (e) { }
+            try { map.setTerrain({ source: 'terrainSource', exaggeration: 1.5 }); } catch (e) {}
             renderCityList();
             syncMarkers();
-            map.flyTo({
-                center: POLAND_CENTER, zoom: INITIAL_ZOOM,
-                pitch: INITIAL_PITCH, bearing: INITIAL_BEARING,
-                duration: 2000
-            });
+            map.flyTo({ center: POLAND_CENTER, zoom: INITIAL_ZOOM, pitch: INITIAL_PITCH, bearing: INITIAL_BEARING, duration: 2000 });
         });
 
-        // ── Keyboard shortcuts ───────────────────────
         document.addEventListener('keydown', function (e) {
             if (e.key === 'Escape') { closePopup(); qs('#searchInput').blur(); }
             if (e.key === '/' && document.activeElement !== qs('#searchInput')) { e.preventDefault(); qs('#searchInput').focus(); }
         });
 
-        // ── Click on map to close popup ──────────────
         map.on('click', function () { if (activeCity) closePopup(); });
     }
 
@@ -758,30 +671,12 @@
                 var totalArea = CITIES_DATA.reduce(function (s, c) { return s + c.area; }, 0);
                 qs('#cityList').innerHTML =
                     '<div style="padding:16px 8px;">' +
-                    '<div class="stat-card" style="margin-bottom:10px;padding:16px;text-align:left;">' +
-                        '<div class="stat-card__label">Общее население</div>' +
-                        '<div class="stat-card__value">' + fmtFull(totalPop) + '</div>' +
-                    '</div>' +
-                    '<div class="stat-card" style="margin-bottom:10px;padding:16px;text-align:left;">' +
-                        '<div class="stat-card__label">Среднее население города</div>' +
-                        '<div class="stat-card__value">' + fmtFull(avgPop) + '</div>' +
-                    '</div>' +
-                    '<div class="stat-card" style="margin-bottom:10px;padding:16px;text-align:left;">' +
-                        '<div class="stat-card__label">Крупнейший город</div>' +
-                        '<div class="stat-card__value" style="font-size:15px;">' + biggest.name + ' (' + fmtFull(biggest.population) + ')</div>' +
-                    '</div>' +
-                    '<div class="stat-card" style="margin-bottom:10px;padding:16px;text-align:left;">' +
-                        '<div class="stat-card__label">Наименьший город</div>' +
-                        '<div class="stat-card__value" style="font-size:15px;">' + smallest.name + ' (' + fmtFull(smallest.population) + ')</div>' +
-                    '</div>' +
-                    '<div class="stat-card" style="margin-bottom:10px;padding:16px;text-align:left;">' +
-                        '<div class="stat-card__label">Общая площадь городов</div>' +
-                        '<div class="stat-card__value">' + fmtFull(Math.round(totalArea)) + ' км²</div>' +
-                    '</div>' +
-                    '<div class="stat-card" style="margin-bottom:10px;padding:16px;text-align:left;">' +
-                        '<div class="stat-card__label">Количество городов</div>' +
-                        '<div class="stat-card__value">' + CITIES_DATA.length + '</div>' +
-                    '</div>' +
+                    '<div class="stat-card" style="margin-bottom:10px;padding:16px;text-align:left;"><div class="stat-card__label">Общее население</div><div class="stat-card__value">' + fmtFull(totalPop) + '</div></div>' +
+                    '<div class="stat-card" style="margin-bottom:10px;padding:16px;text-align:left;"><div class="stat-card__label">Среднее население города</div><div class="stat-card__value">' + fmtFull(avgPop) + '</div></div>' +
+                    '<div class="stat-card" style="margin-bottom:10px;padding:16px;text-align:left;"><div class="stat-card__label">Крупнейший город</div><div class="stat-card__value" style="font-size:15px;">' + biggest.name + ' (' + fmtFull(biggest.population) + ')</div></div>' +
+                    '<div class="stat-card" style="margin-bottom:10px;padding:16px;text-align:left;"><div class="stat-card__label">Наименьший город</div><div class="stat-card__value" style="font-size:15px;">' + smallest.name + ' (' + fmtFull(smallest.population) + ')</div></div>' +
+                    '<div class="stat-card" style="margin-bottom:10px;padding:16px;text-align:left;"><div class="stat-card__label">Общая площадь городов</div><div class="stat-card__value">' + fmtFull(Math.round(totalArea)) + ' км²</div></div>' +
+                    '<div class="stat-card" style="margin-bottom:10px;padding:16px;text-align:left;"><div class="stat-card__label">Количество городов</div><div class="stat-card__value">' + CITIES_DATA.length + '</div></div>' +
                     '</div>';
                 break;
         }
@@ -802,5 +697,4 @@
     } else {
         boot();
     }
-
 })();
