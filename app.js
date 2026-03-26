@@ -1,17 +1,18 @@
 // =====================================================
-// PolskaMapper — Main Application (MapLibre GL v5 — TRUE 3D)
-// 3D Terrain + 3D Buildings + 3D City Extrusions + Sky
+// PolskaMapper — Main Application (MapLibre GL v5)
+// Google Maps-style 3D: real buildings, terrain, sky
 // =====================================================
 
 (function () {
     'use strict';
 
-    // ─── Free tile sources ───────────────────────────
+    // ─── Tile sources ────────────────────────────────
     var TERRAIN_TILES = 'https://demotiles.maplibre.org/terrain-tiles/tiles.json';
+    var OFM_STYLE_BRIGHT = 'https://tiles.openfreemap.org/styles/bright';
     var OFM_PLANET = 'https://tiles.openfreemap.org/planet';
 
-    // Build map styles with terrain + sky built-in
-    function buildStyle(variant) {
+    // For dark & satellite we build a raster style with OFM vector overlay
+    function buildRasterStyle(variant) {
         var rasterSource;
         if (variant === 'dark') {
             rasterSource = {
@@ -20,18 +21,6 @@
                     'https://a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png',
                     'https://b.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png',
                     'https://c.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png'
-                ],
-                tileSize: 256,
-                attribution: '&copy; CARTO, &copy; OpenStreetMap',
-                maxzoom: 19
-            };
-        } else if (variant === 'light') {
-            rasterSource = {
-                type: 'raster',
-                tiles: [
-                    'https://a.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png',
-                    'https://b.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png',
-                    'https://c.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png'
                 ],
                 tileSize: 256,
                 attribution: '&copy; CARTO, &copy; OpenStreetMap',
@@ -75,7 +64,7 @@
                     id: 'background',
                     type: 'background',
                     paint: {
-                        'background-color': variant === 'dark' ? '#0D1117' : variant === 'light' ? '#e8e8e8' : '#1a1a2e'
+                        'background-color': variant === 'dark' ? '#0D1117' : '#1a1a2e'
                     }
                 },
                 {
@@ -107,19 +96,12 @@
                 'horizon-fog-blend': 0.8,
                 'fog-color': '#0D1117',
                 'fog-ground-blend': 0.1
-            } : variant === 'satellite' ? {
+            } : {
                 'sky-color': '#1a6fd4',
                 'sky-horizon-blend': 0.4,
                 'horizon-color': '#8fc8f8',
                 'horizon-fog-blend': 0.6,
                 'fog-color': '#c8dff0',
-                'fog-ground-blend': 0.05
-            } : {
-                'sky-color': '#6bb8f7',
-                'sky-horizon-blend': 0.4,
-                'horizon-color': '#c8e0f8',
-                'horizon-fog-blend': 0.5,
-                'fog-color': '#e8f0f8',
                 'fog-ground-blend': 0.05
             }
         };
@@ -195,9 +177,10 @@
     // ═════════════════════════════════════════════════
     function initMap() {
         setLoading(20);
+
         map = new maplibregl.Map({
             container: 'map',
-            style: buildStyle('dark'),
+            style: buildRasterStyle('dark'),
             center: POLAND_CENTER,
             zoom: INITIAL_ZOOM,
             pitch: INITIAL_PITCH,
@@ -219,8 +202,6 @@
             addBorder();
             setLoading(65);
             add3DBuildings();
-            setLoading(70);
-            add3DCityExtrusions();
             setLoading(80);
             addHeatCircles();
             setLoading(85);
@@ -251,13 +232,41 @@
         });
     }
 
-    // ─── 3D Buildings from OpenFreeMap ────────────────
+    // ─── Find the first symbol layer (to insert 3D below labels) ───
+    function getFirstSymbolLayer() {
+        var layers = map.getStyle().layers || [];
+        for (var i = 0; i < layers.length; i++) {
+            if (layers[i].type === 'symbol') return layers[i].id;
+        }
+        return undefined;
+    }
+
+    // ─── Find vector source name (differs between OFM style and custom) ───
+    function getVectorSourceName() {
+        var style = map.getStyle();
+        // In our raster styles we explicitly name it 'openfreemap'
+        if (style.sources['openfreemap']) return 'openfreemap';
+        // In OFM bright style, find the first vector source
+        var keys = Object.keys(style.sources);
+        for (var i = 0; i < keys.length; i++) {
+            if (style.sources[keys[i]].type === 'vector') return keys[i];
+        }
+        return 'openfreemap';
+    }
+
+    // ─── 3D Buildings from OpenFreeMap (real buildings!) ──
     function add3DBuildings() {
         if (map.getLayer('3d-buildings')) return;
+
         var isDark = (currentStyle === 'dark');
+        var isSat = (currentStyle === 'satellite');
+        var isLight = (currentStyle === 'light');
+        var sourceName = getVectorSourceName();
+        var beforeLayer = isLight ? getFirstSymbolLayer() : undefined;
+
         map.addLayer({
             id: '3d-buildings',
-            source: 'openfreemap',
+            source: sourceName,
             'source-layer': 'building',
             type: 'fill-extrusion',
             minzoom: 13,
@@ -265,10 +274,11 @@
             paint: {
                 'fill-extrusion-color': [
                     'interpolate', ['linear'], ['get', 'render_height'],
-                    0, isDark ? '#1a1a3e' : '#d4d4d4',
-                    50, isDark ? '#2a2a5e' : '#b8b8d0',
-                    100, isDark ? '#3a3a7e' : '#9898b8',
-                    200, isDark ? '#5a5aae' : '#7878a0'
+                    0, isDark ? '#1a1a3e' : isSat ? '#aab8c2' : '#ddd9d0',
+                    20, isDark ? '#252555' : isSat ? '#b8c4cc' : '#d4d0c7',
+                    50, isDark ? '#2a2a5e' : isSat ? '#c0ccd5' : '#cbc7be',
+                    100, isDark ? '#3a3a7e' : isSat ? '#c8d4dd' : '#c0bcb3',
+                    200, isDark ? '#5a5aae' : isSat ? '#d0dce5' : '#b5b1a8'
                 ],
                 'fill-extrusion-height': [
                     'interpolate', ['linear'], ['zoom'],
@@ -281,69 +291,9 @@
                     ['get', 'render_min_height'],
                     0
                 ],
-                'fill-extrusion-opacity': 0.75
+                'fill-extrusion-opacity': isDark ? 0.75 : 0.85
             }
-        });
-    }
-
-    // ─── 3D City Extrusions (population pillars) ─────
-    function add3DCityExtrusions() {
-        if (map.getSource('city-extrusions')) return;
-
-        var features = CITIES_DATA.map(function (city) {
-            // Hexagonal prism for each city — size proportional to population
-            var radius = 0.04 + (city.population / 2000000) * 0.06;
-            var height = 500 + (city.population / 2000000) * 18000;
-            var sides = 6;
-            var coords = [];
-            for (var i = 0; i <= sides; i++) {
-                var angle = (i / sides) * Math.PI * 2;
-                coords.push([
-                    city.coordinates[0] + radius * Math.cos(angle),
-                    city.coordinates[1] + radius * Math.sin(angle) * 0.7
-                ]);
-            }
-            return {
-                type: 'Feature',
-                geometry: { type: 'Polygon', coordinates: [coords] },
-                properties: {
-                    name: city.name,
-                    population: city.population,
-                    height: height,
-                    color: city.color,
-                    category: city.category
-                }
-            };
-        });
-
-        map.addSource('city-extrusions', {
-            type: 'geojson',
-            data: { type: 'FeatureCollection', features: features }
-        });
-
-        map.addLayer({
-            id: 'city-extrusion-layer',
-            type: 'fill-extrusion',
-            source: 'city-extrusions',
-            paint: {
-                'fill-extrusion-color': ['get', 'color'],
-                'fill-extrusion-height': ['get', 'height'],
-                'fill-extrusion-base': 0,
-                'fill-extrusion-opacity': 0.8,
-                'fill-extrusion-vertical-gradient': true
-            }
-        });
-
-        // Glow at base
-        map.addLayer({
-            id: 'city-extrusion-glow',
-            type: 'fill',
-            source: 'city-extrusions',
-            paint: {
-                'fill-color': ['get', 'color'],
-                'fill-opacity': 0.15
-            }
-        });
+        }, beforeLayer);
     }
 
     // ─── Heat circles ────────────────────────────────
@@ -398,12 +348,78 @@
 
     // ─── Remove custom layers before style change ────
     function removeCustomLayers() {
-        ['3d-buildings', 'city-extrusion-layer', 'city-extrusion-glow', 'heat-glow', 'pl-line', 'pl-fill'].forEach(function (id) {
+        ['3d-buildings', 'heat-glow', 'pl-line', 'pl-fill'].forEach(function (id) {
             try { if (map.getLayer(id)) map.removeLayer(id); } catch (e) { }
         });
-        ['city-extrusions', 'heat', 'pl-border'].forEach(function (id) {
+        ['heat', 'pl-border'].forEach(function (id) {
             try { if (map.getSource(id)) map.removeSource(id); } catch (e) { }
         });
+    }
+
+    // ─── Get style for mode ──────────────────────────
+    // Light = OpenFreeMap vector style (Google Maps-like with roads, labels, parks)
+    // Dark = CARTO dark raster + OFM buildings
+    // Satellite = Esri satellite raster + OFM buildings
+    function getStyleForMode(mode) {
+        if (mode === 'light') {
+            return OFM_STYLE_BRIGHT;
+        }
+        return buildRasterStyle(mode);
+    }
+
+    // ─── After any style loads, add terrain + custom layers ──
+    function onStyleLoaded() {
+        // For light (OFM vector) style, add terrain/hillshade sources + sky
+        if (currentStyle === 'light') {
+            if (!map.getSource('terrainSource')) {
+                map.addSource('terrainSource', {
+                    type: 'raster-dem',
+                    url: TERRAIN_TILES,
+                    tileSize: 256
+                });
+            }
+            if (!map.getSource('hillshadeSource')) {
+                map.addSource('hillshadeSource', {
+                    type: 'raster-dem',
+                    url: TERRAIN_TILES,
+                    tileSize: 256
+                });
+            }
+            if (!map.getLayer('hillshade')) {
+                map.addLayer({
+                    id: 'hillshade',
+                    type: 'hillshade',
+                    source: 'hillshadeSource',
+                    layout: { visibility: 'visible' },
+                    paint: {
+                        'hillshade-shadow-color': '#473B24',
+                        'hillshade-highlight-color': '#ffffff',
+                        'hillshade-accent-color': '#5a5a5a',
+                        'hillshade-exaggeration': 0.5
+                    }
+                }, getFirstSymbolLayer());
+            }
+            if (is3D) {
+                try { map.setTerrain({ source: 'terrainSource', exaggeration: 1.5 }); } catch (e) { }
+            }
+            map.setSky({
+                'sky-color': '#6bb8f7',
+                'sky-horizon-blend': 0.4,
+                'horizon-color': '#c8e0f8',
+                'horizon-fog-blend': 0.5,
+                'fog-color': '#e8f0f8',
+                'fog-ground-blend': 0.05
+            });
+        }
+
+        addBorder();
+        add3DBuildings();
+        addHeatCircles();
+        syncMarkers();
+
+        if (is3D) {
+            try { map.setTerrain({ source: 'terrainSource', exaggeration: 1.5 }); } catch (e) { }
+        }
     }
 
     // ─── Markers ─────────────────────────────────────
@@ -615,18 +631,11 @@
 
                 removeCustomLayers();
                 clearMarkers();
-                map.setStyle(buildStyle(s));
+                map.setStyle(getStyleForMode(s));
 
-                map.once('load', function () {
+                map.once('style.load', function () {
                     map.jumpTo(cam);
-                    addBorder();
-                    add3DBuildings();
-                    add3DCityExtrusions();
-                    addHeatCircles();
-                    syncMarkers();
-                    if (is3D) {
-                        try { map.setTerrain({ source: 'terrainSource', exaggeration: 1.5 }); } catch (e) { }
-                    }
+                    onStyleLoaded();
                 });
             });
         });
