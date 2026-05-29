@@ -1,18 +1,30 @@
 // =====================================================
 // PolskaMapper — Main Application (MapLibre GL v5)
-// Google Maps-style 3D — vector tiles, real buildings
+// Light mode only — 360° rotation, FPS boost, building highlights
 // =====================================================
 
 (function () {
     'use strict';
 
-    // ─── OpenFreeMap vector styles (real roads, labels, buildings, parks) ───
-    var OFM_DARK    = 'https://tiles.openfreemap.org/styles/dark';
+    // ─── Конфигурация с оптимизациями ─────────────────
+    var CONFIG = {
+        MAX_TILE_CACHE_SIZE: 200,
+        TILE_CACHE_CLEAN_INTERVAL: 60000,
+        FPS_THROTTLE: 60,
+        BUILDINGS_MIN_ZOOM: 14,
+        MAX_BUILDING_HEIGHT: 100,
+        BUILDING_OPACITY: 0.85,
+        ROTATION_SPEED: 0.3,
+        ANIMATION_DURATION: 800,
+        ENABLE_360_ROTATION: true,
+        ENABLE_PERFORMANCE_MODE: true
+    };
+
+    // ─── OpenFreeMap vector styles (только светлые) ───
     var OFM_LIBERTY = 'https://tiles.openfreemap.org/styles/liberty';
-    var OFM_PLANET  = 'https://tiles.openfreemap.org/planet';
     var TERRAIN_URL = 'https://demotiles.maplibre.org/terrain-tiles/tiles.json';
 
-    // Satellite needs a custom raster style + OFM vector overlay
+    // Спутниковый стиль
     function buildSatelliteStyle() {
         return {
             version: 8,
@@ -39,11 +51,11 @@
                 },
                 'openmaptiles': {
                     type: 'vector',
-                    url: OFM_PLANET
+                    url: OFM_LIBERTY.replace('/styles/liberty', '/planet')
                 }
             },
             layers: [
-                { id: 'background', type: 'background', paint: { 'background-color': '#1a1a2e' } },
+                { id: 'background', type: 'background', paint: { 'background-color': '#f0f0f0' } },
                 { id: 'satellite-tiles', type: 'raster', source: 'satellite-tiles' },
                 {
                     id: 'hillshade', type: 'hillshade', source: 'hillshadeSource',
@@ -57,11 +69,11 @@
             ],
             terrain: { source: 'terrainSource', exaggeration: 1.5 },
             sky: {
-                'sky-color': '#1a6fd4',
+                'sky-color': '#87CEEB',
                 'sky-horizon-blend': 0.4,
-                'horizon-color': '#8fc8f8',
+                'horizon-color': '#b0d4f8',
                 'horizon-fog-blend': 0.6,
-                'fog-color': '#c8dff0',
+                'fog-color': '#d4e8f8',
                 'fog-ground-blend': 0.05
             }
         };
@@ -78,20 +90,36 @@
     var activeCity = null;
     var currentFilter = 'all';
     var currentSort = 'population';
-    var currentStyle = 'dark';
+    var currentStyle = 'light';
     var is3D = true;
     var currentLang = 'ru';
     var currentNav = 'map';
+    var isRotating = false;
+    var rotationFrameId = null;
 
     // ─── Helpers ─────────────────────────────────────
     function qs(sel) { return document.querySelector(sel); }
     function qsa(sel) { return document.querySelectorAll(sel); }
+    
     function fmt(n) {
         if (n >= 1e6) return (n / 1e6).toFixed(1) + 'M';
         if (n >= 1e3) return (n / 1e3).toFixed(0) + 'K';
         return String(n);
     }
+    
     function fmtFull(n) { return n.toLocaleString('ru-RU'); }
+
+    function throttleRAF(callback) {
+        var lastTime = 0;
+        var throttleTime = 1000 / CONFIG.FPS_THROTTLE;
+        return function() {
+            var now = performance.now();
+            if (now - lastTime >= throttleTime) {
+                lastTime = now;
+                callback.apply(this, arguments);
+            }
+        };
+    }
 
     function animateValue(el, end, dur) {
         var t0 = performance.now();
@@ -104,25 +132,31 @@
         requestAnimationFrame(tick);
     }
 
-    // ─── Loading ─────────────────────────────────────
-    function setLoading(pct) { qs('#loadingBar').style.width = pct + '%'; }
+    function setLoading(pct) { 
+        var bar = qs('#loadingBar');
+        if (bar) bar.style.width = pct + '%'; 
+    }
+    
     function hideLoading() {
         setLoading(100);
-        setTimeout(function () { qs('#loadingScreen').classList.add('loading-screen--hidden'); }, 400);
+        setTimeout(function () { 
+            var screen = qs('#loadingScreen');
+            if (screen) screen.classList.add('loading-screen--hidden'); 
+        }, 400);
     }
 
     // ─── Filtering ───────────────────────────────────
     function getFilteredCities() {
-        var cities = CITIES_DATA.slice();
+        var cities = window.CITIES_DATA ? window.CITIES_DATA.slice() : [];
         if (currentFilter !== 'all') {
             cities = cities.filter(function (c) { return c.category === currentFilter; });
         }
-        var q = (qs('#searchInput').value || '').toLowerCase().trim();
+        var q = (qs('#searchInput')?.value || '').toLowerCase().trim();
         if (q) {
             cities = cities.filter(function (c) {
-                return c.name.toLowerCase().indexOf(q) !== -1 ||
-                       c.nameLocal.toLowerCase().indexOf(q) !== -1 ||
-                       c.voivodeship.toLowerCase().indexOf(q) !== -1;
+                return (c.name?.toLowerCase().indexOf(q) !== -1) ||
+                       (c.nameLocal?.toLowerCase().indexOf(q) !== -1) ||
+                       (c.voivodeship?.toLowerCase().indexOf(q) !== -1);
             });
         }
         if (currentSort === 'population') cities.sort(function (a, b) { return b.population - a.population; });
@@ -131,34 +165,279 @@
         return cities;
     }
 
-    // ─── Get the style URL/object for a mode ─────────
     function getStyleForMode(mode) {
-        if (mode === 'dark') return OFM_DARK;
         if (mode === 'light') return OFM_LIBERTY;
-        return buildSatelliteStyle(); // satellite
+        if (mode === 'satellite') return buildSatelliteStyle();
+        return OFM_LIBERTY;
     }
 
-    // ═════════════════════════════════════════════════
-    // MAP INIT
-    // ═════════════════════════════════════════════════
+    // ─── 360° Rotation Implementation ─────────────────
+    function enableFullRotation() {
+        if (!CONFIG.ENABLE_360_ROTATION) return;
+        
+        var isDragging = false;
+        var lastX = 0;
+        
+        map.on('mousedown', function(e) {
+            if (e.originalEvent.button === 1 || e.originalEvent.button === 2) {
+                e.preventDefault();
+                isDragging = true;
+                lastX = e.point.x;
+                if (rotationFrameId) {
+                    cancelAnimationFrame(rotationFrameId);
+                    rotationFrameId = null;
+                    isRotating = false;
+                }
+            }
+        });
+
+        map.on('mousemove', throttleRAF(function(e) {
+            if (isDragging) {
+                var delta = e.point.x - lastX;
+                var newBearing = (map.getBearing() + delta * CONFIG.ROTATION_SPEED) % 360;
+                map.setBearing(newBearing);
+                lastX = e.point.x;
+            }
+        }));
+
+        map.on('mouseup', function() {
+            isDragging = false;
+        });
+
+        // Auto-rotation on Space key
+        document.addEventListener('keydown', function(e) {
+            if (e.code === 'Space' && document.activeElement !== qs('#searchInput')) {
+                e.preventDefault();
+                toggleAutoRotation();
+            }
+        });
+    }
+
+    function toggleAutoRotation() {
+        if (rotationFrameId) {
+            cancelAnimationFrame(rotationFrameId);
+            rotationFrameId = null;
+            isRotating = false;
+            return;
+        }
+        
+        isRotating = true;
+        var rotationSpeed = 0.15;
+        var lastTimestamp = null;
+        
+        function rotateFrame(timestamp) {
+            if (!isRotating) return;
+            if (lastTimestamp) {
+                var delta = Math.min(timestamp - lastTimestamp, 100) / 1000;
+                var newBearing = (map.getBearing() + rotationSpeed * delta * 30) % 360;
+                map.setBearing(newBearing);
+            }
+            lastTimestamp = timestamp;
+            rotationFrameId = requestAnimationFrame(rotateFrame);
+        }
+        
+        rotationFrameId = requestAnimationFrame(rotateFrame);
+    }
+
+    // ─── Optimized 3D Buildings ──────────────────────
+    function addOptimized3DBuildings() {
+        if (map.getLayer('3d-buildings-optimized')) return;
+        
+        var srcName = getVectorSourceName();
+        
+        var checkBuildings = function() {
+            try {
+                map.addLayer({
+                    id: '3d-buildings-optimized',
+                    source: srcName,
+                    'source-layer': 'building',
+                    type: 'fill-extrusion',
+                    minzoom: CONFIG.BUILDINGS_MIN_ZOOM,
+                    maxzoom: 18,
+                    filter: [
+                        'all',
+                        ['!=', ['get', 'hide_3d'], true],
+                        ['<=', ['get', 'render_height'], CONFIG.MAX_BUILDING_HEIGHT]
+                    ],
+                    paint: {
+                        'fill-extrusion-color': [
+                            'interpolate', ['linear'], ['get', 'render_height'],
+                            0, '#d4cfc4',
+                            30, '#ddd8cc',
+                            60, '#e6e0d4',
+                            100, '#efe8dc'
+                        ],
+                        'fill-extrusion-height': [
+                            'interpolate', ['linear'], ['zoom'],
+                            14, ['min', ['get', 'render_height'], 15],
+                            15, ['min', ['get', 'render_height'], 30],
+                            16, ['min', ['get', 'render_height'], 60],
+                            17, ['get', 'render_height']
+                        ],
+                        'fill-extrusion-base': ['get', 'render_min_height'],
+                        'fill-extrusion-opacity': CONFIG.BUILDING_OPACITY,
+                        'fill-extrusion-vertical-gradient': false
+                    }
+                }, getFirstSymbolLayer());
+            } catch(e) {
+                console.warn('3D buildings not available:', e);
+            }
+        };
+        
+        if (map.loaded()) {
+            checkBuildings();
+        } else {
+            map.once('load', checkBuildings);
+        }
+    }
+
+    // ─── Building Highlights (like Luna) ─────────────
+    function addBuildingHighlights() {
+        if (!window.CITIES_DATA) return;
+        if (map.getSource('city-areas')) return;
+        
+        var cityPoints = window.CITIES_DATA.map(function(city) {
+            return {
+                type: 'Feature',
+                geometry: { type: 'Point', coordinates: city.coordinates },
+                properties: { name: city.name, radius: 3500 }
+            };
+        });
+        
+        try {
+            map.addSource('city-areas', {
+                type: 'geojson',
+                data: {
+                    type: 'FeatureCollection',
+                    features: cityPoints
+                }
+            });
+            
+            map.addLayer({
+                id: 'city-glow',
+                type: 'circle',
+                source: 'city-areas',
+                paint: {
+                    'circle-radius': ['get', 'radius'],
+                    'circle-color': '#FFAA44',
+                    'circle-opacity': 0.15,
+                    'circle-blur': 0.9
+                },
+                minzoom: 11
+            });
+        } catch(e) {
+            console.warn('Building highlights not available:', e);
+        }
+    }
+
+    // ─── Performance Optimizations ───────────────────
+    function optimizeTileCache() {
+        if (!map || !CONFIG.ENABLE_PERFORMANCE_MODE) return;
+        
+        setInterval(function() {
+            if (map && map.style && map.style._tiles) {
+                var tiles = map.style._tiles;
+                var tilesCount = Object.keys(tiles || {}).length;
+                if (tilesCount > CONFIG.MAX_TILE_CACHE_SIZE) {
+                    var toRemove = [];
+                    for (var id in tiles) {
+                        if (tiles[id] && tiles[id].timeAdded && 
+                            (Date.now() - tiles[id].timeAdded > CONFIG.TILE_CACHE_CLEAN_INTERVAL)) {
+                            toRemove.push(id);
+                        }
+                    }
+                    toRemove.forEach(function(id) {
+                        if (map.style._tiles[id]) {
+                            delete map.style._tiles[id];
+                        }
+                    });
+                }
+            }
+        }, CONFIG.TILE_CACHE_CLEAN_INTERVAL);
+    }
+
+    // ─── Virtualized Markers ─────────────────────────
+    function syncMarkers() {
+        clearMarkers();
+        var cities = getFilteredCities();
+        var currentZoom = map.getZoom();
+        
+        if (currentZoom < 7) return;
+        
+        var maxMarkers = currentZoom < 9 ? 10 : (currentZoom < 11 ? 20 : 40);
+        var citiesToShow = cities.slice(0, maxMarkers);
+        
+        citiesToShow.forEach(function (city) {
+            var el = document.createElement('div');
+            el.className = 'marker';
+            el.style.willChange = 'transform';
+            
+            var isCapital = city.category === 'capital';
+            var dot = document.createElement('div');
+            dot.className = 'marker__dot' + (isCapital ? ' marker__dot--capital' : '');
+            dot.style.backgroundColor = city.color;
+            dot.style.border = '2px solid white';
+            dot.style.boxShadow = '0 0 8px ' + city.color;
+
+            var label = document.createElement('span');
+            label.className = 'marker__label' + (isCapital ? ' marker__label--capital' : '');
+            label.textContent = currentLang === 'pl' ? city.nameLocal : city.name;
+            if (isCapital) { 
+                label.style.background = city.color; 
+                label.style.color = 'white';
+                label.style.borderColor = city.color; 
+            } else {
+                label.style.backgroundColor = 'white';
+                label.style.color = '#333';
+            }
+
+            el.appendChild(dot);
+            el.appendChild(label);
+            el.addEventListener('click', function (e) { 
+                e.stopPropagation(); 
+                selectCity(city); 
+            });
+
+            var m = new maplibregl.Marker({ element: el, anchor: 'center' })
+                .setLngLat(city.coordinates).addTo(map);
+            markers.push(m);
+        });
+    }
+    
+    function clearMarkers() { 
+        markers.forEach(function (m) { m.remove(); }); 
+        markers.length = 0; 
+    }
+
+    // ─── Map Initialization ──────────────────────────
     function initMap() {
         setLoading(20);
-        map = new maplibregl.Map({
+        
+        var mapOptions = {
             container: 'map',
-            style: OFM_DARK,
+            style: OFM_LIBERTY,
             center: POLAND_CENTER,
             zoom: INITIAL_ZOOM,
             pitch: INITIAL_PITCH,
             bearing: INITIAL_BEARING,
-            antialias: true,
+            antialias: !CONFIG.ENABLE_PERFORMANCE_MODE,
             maxBounds: [[10, 47], [28, 57]],
             minZoom: 4,
-            maxZoom: 18,
-            maxPitch: 85,
+            maxZoom: CONFIG.ENABLE_PERFORMANCE_MODE ? 17 : 18,
+            maxPitch: 75,
             fadeDuration: 0,
-            trackResize: true,
-            canvasContextAttributes: { antialias: true }
-        });
+            trackResize: true
+        };
+        
+        if (CONFIG.ENABLE_PERFORMANCE_MODE) {
+            mapOptions.preserveDrawingBuffer = false;
+            mapOptions.failIfMajorPerformanceCaveat = false;
+            mapOptions.pixelRatio = window.devicePixelRatio > 1 ? 1 : 1;
+        } else {
+            mapOptions.canvasContextAttributes = { antialias: true };
+        }
+        
+        map = new maplibregl.Map(mapOptions);
         setLoading(40);
 
         map.on('load', function () {
@@ -168,6 +447,7 @@
             hideLoading();
             animateStats();
             startRotateAnimation();
+            optimizeTileCache();
         });
 
         map.on('error', function (e) {
@@ -176,18 +456,42 @@
         });
     }
 
-    // ─── Called after every style load ────────────────
     function onStyleReady() {
         ensureTerrain();
         addBorder();
-        add3DBuildings();
+        addOptimized3DBuildings();
         addHeatCircles();
+        addBuildingHighlights();
         syncMarkers();
+        enableFullRotation();
+        fixCrookedModels();
+        
+        // Update markers on zoom/move
+        map.on('moveend', throttleRAF(function() {
+            syncMarkers();
+        }));
+        
+        // Performance mode: reduce opacity during movement
+        if (CONFIG.ENABLE_PERFORMANCE_MODE) {
+            var moveTimeout;
+            map.on('movestart', function() {
+                if (map.getLayer('3d-buildings-optimized')) {
+                    map.setPaintProperty('3d-buildings-optimized', 'fill-extrusion-opacity', 0.3);
+                }
+                if (moveTimeout) clearTimeout(moveTimeout);
+            });
+            
+            map.on('moveend', function() {
+                moveTimeout = setTimeout(function() {
+                    if (map.getLayer('3d-buildings-optimized')) {
+                        map.setPaintProperty('3d-buildings-optimized', 'fill-extrusion-opacity', CONFIG.BUILDING_OPACITY);
+                    }
+                }, 500);
+            });
+        }
     }
 
-    // ─── Add terrain + sky to any style ──────────────
     function ensureTerrain() {
-        // Add terrain source if missing (vector styles don't include it)
         if (!map.getSource('terrainSource')) {
             map.addSource('terrainSource', {
                 type: 'raster-dem', url: TERRAIN_URL, tileSize: 256
@@ -198,46 +502,35 @@
                 type: 'raster-dem', url: TERRAIN_URL, tileSize: 256
             });
         }
-        // Hillshade layer (insert below labels for vector styles)
         if (!map.getLayer('custom-hillshade')) {
-            var isDark = (currentStyle === 'dark');
             var before = getFirstSymbolLayer();
             map.addLayer({
                 id: 'custom-hillshade', type: 'hillshade', source: 'hillshadeSource',
                 paint: {
-                    'hillshade-shadow-color': isDark ? '#000000' : '#473B24',
-                    'hillshade-highlight-color': isDark ? '#111122' : '#ffffff',
-                    'hillshade-accent-color': isDark ? '#0a0a1e' : '#5a5a5a',
+                    'hillshade-shadow-color': '#473B24',
+                    'hillshade-highlight-color': '#ffffff',
+                    'hillshade-accent-color': '#5a5a5a',
                     'hillshade-exaggeration': 0.4
                 }
             }, before);
         }
-        // Enable 3D terrain
         if (is3D) {
             try { map.setTerrain({ source: 'terrainSource', exaggeration: 1.5 }); } catch (e) {}
         }
-        // Sky
-        var isDark2 = (currentStyle === 'dark');
+        
         var isSat = (currentStyle === 'satellite');
         try {
-            map.setSky(isDark2 ? {
-                'sky-color': '#0D1117',
-                'sky-horizon-blend': 0.5,
-                'horizon-color': '#1a1a3e',
-                'horizon-fog-blend': 0.8,
-                'fog-color': '#0D1117',
-                'fog-ground-blend': 0.1
-            } : isSat ? {
-                'sky-color': '#1a6fd4',
+            map.setSky(isSat ? {
+                'sky-color': '#87CEEB',
                 'sky-horizon-blend': 0.4,
-                'horizon-color': '#8fc8f8',
+                'horizon-color': '#b0d4f8',
                 'horizon-fog-blend': 0.6,
-                'fog-color': '#c8dff0',
+                'fog-color': '#d4e8f8',
                 'fog-ground-blend': 0.05
             } : {
-                'sky-color': '#6bb8f7',
+                'sky-color': '#9fc8e8',
                 'sky-horizon-blend': 0.4,
-                'horizon-color': '#c8e0f8',
+                'horizon-color': '#d0e4f4',
                 'horizon-fog-blend': 0.5,
                 'fog-color': '#e8f0f8',
                 'fog-ground-blend': 0.05
@@ -245,21 +538,20 @@
         } catch (e) {}
     }
 
-    // ─── Poland Border ───────────────────────────────
     function addBorder() {
+        if (!window.POLAND_BORDER) return;
         if (map.getSource('pl-border')) return;
-        map.addSource('pl-border', { type: 'geojson', data: POLAND_BORDER });
+        map.addSource('pl-border', { type: 'geojson', data: window.POLAND_BORDER });
         map.addLayer({
             id: 'pl-fill', type: 'fill', source: 'pl-border',
-            paint: { 'fill-color': '#E63946', 'fill-opacity': 0.04 }
+            paint: { 'fill-color': '#E63946', 'fill-opacity': 0.05 }
         });
         map.addLayer({
             id: 'pl-line', type: 'line', source: 'pl-border',
-            paint: { 'line-color': '#E63946', 'line-width': 2, 'line-opacity': 0.6 }
+            paint: { 'line-color': '#E63946', 'line-width': 2.5, 'line-opacity': 0.7 }
         });
     }
 
-    // ─── Find first symbol layer (to insert below labels) ───
     function getFirstSymbolLayer() {
         var layers = map.getStyle().layers || [];
         for (var i = 0; i < layers.length; i++) {
@@ -268,14 +560,10 @@
         return undefined;
     }
 
-    // ─── Find the vector source name ─────────────────
     function getVectorSourceName() {
         var sources = map.getStyle().sources;
-        // OFM styles name it 'openmaptiles'
         if (sources['openmaptiles'] && sources['openmaptiles'].type === 'vector') return 'openmaptiles';
-        // Our custom satellite style also names it 'openmaptiles'
         if (sources['openfreemap'] && sources['openfreemap'].type === 'vector') return 'openfreemap';
-        // Fallback: find first vector source
         var keys = Object.keys(sources);
         for (var i = 0; i < keys.length; i++) {
             if (sources[keys[i]].type === 'vector') return keys[i];
@@ -283,47 +571,12 @@
         return 'openmaptiles';
     }
 
-    // ─── 3D Buildings (real buildings from OpenStreetMap data) ──
-    function add3DBuildings() {
-        // Liberty style already has 'building-3d' layer — just make sure it exists
-        if (currentStyle === 'light' && map.getLayer('building-3d')) {
-            return; // already has 3D buildings built into the style
-        }
-        if (map.getLayer('3d-buildings')) return;
-
-        var isDark = (currentStyle === 'dark');
-        var isSat = (currentStyle === 'satellite');
-        var srcName = getVectorSourceName();
-        var before = getFirstSymbolLayer();
-
-        map.addLayer({
-            id: '3d-buildings',
-            source: srcName,
-            'source-layer': 'building',
-            type: 'fill-extrusion',
-            minzoom: 14,
-            filter: ['!=', ['get', 'hide_3d'], true],
-            paint: {
-                'fill-extrusion-color': isDark
-                    ? ['interpolate', ['linear'], ['get', 'render_height'],
-                        0, '#1c1c28', 20, '#222234', 50, '#282844', 100, '#303060', 200, '#383878']
-                    : isSat
-                    ? ['interpolate', ['linear'], ['get', 'render_height'],
-                        0, '#b8c4cc', 20, '#c0ccd5', 50, '#c8d4dd', 100, '#d0dce5', 200, '#d8e4ed']
-                    : 'hsl(35,8%,85%)',
-                'fill-extrusion-height': ['get', 'render_height'],
-                'fill-extrusion-base': ['get', 'render_min_height'],
-                'fill-extrusion-opacity': 0.8
-            }
-        }, before);
-    }
-
-    // ─── Heat circles (population glow) ──────────────
     function addHeatCircles() {
+        if (!window.CITIES_DATA) return;
         if (map.getSource('heat')) return;
         var fc = {
             type: 'FeatureCollection',
-            features: CITIES_DATA.map(function (c) {
+            features: window.CITIES_DATA.map(function (c) {
                 return {
                     type: 'Feature',
                     geometry: { type: 'Point', coordinates: c.coordinates },
@@ -338,13 +591,31 @@
                 'circle-radius': ['interpolate', ['linear'], ['get', 'population'],
                     100000, 18, 500000, 32, 1000000, 45, 2000000, 65],
                 'circle-color': '#E63946',
-                'circle-opacity': 0.07,
+                'circle-opacity': 0.08,
                 'circle-blur': 1
             }
         });
     }
 
-    // ─── Slow initial camera rotation ────────────────
+    function fixCrookedModels() {
+        map.on('sourcedata', throttleRAF(function(e) {
+            if (e.sourceId === getVectorSourceName() && e.sourceLayer === 'building') {
+                try {
+                    if (map.style && map.style._tiles) {
+                        Object.keys(map.style._tiles).forEach(function(tileId) {
+                            var tile = map.style._tiles[tileId];
+                            if (tile && tile.data && (!tile.data.layers || tile.data.layers.length === 0)) {
+                                delete map.style._tiles[tileId];
+                            }
+                        });
+                    }
+                } catch(err) {
+                    console.warn('Error fixing models:', err);
+                }
+            }
+        }));
+    }
+
     var rotateAnimId = null;
     function startRotateAnimation() {
         var startBearing = map.getBearing();
@@ -363,48 +634,17 @@
         map.once('touchstart', function () { if (rotateAnimId) { cancelAnimationFrame(rotateAnimId); rotateAnimId = null; } });
     }
 
-    // ─── Remove custom layers (before style change) ──
     function removeCustomLayers() {
-        ['3d-buildings', 'custom-hillshade', 'heat-glow', 'pl-line', 'pl-fill'].forEach(function (id) {
+        ['3d-buildings-optimized', '3d-buildings', 'custom-hillshade', 'heat-glow', 'pl-line', 'pl-fill', 'city-glow', 'building-highlight'].forEach(function (id) {
             try { if (map.getLayer(id)) map.removeLayer(id); } catch (e) {}
         });
-        ['heat', 'pl-border', 'terrainSource', 'hillshadeSource'].forEach(function (id) {
+        ['heat', 'pl-border', 'terrainSource', 'hillshadeSource', 'city-areas'].forEach(function (id) {
             try { if (map.getSource(id)) map.removeSource(id); } catch (e) {}
         });
     }
 
-    // ─── Markers ─────────────────────────────────────
-    function syncMarkers() {
-        clearMarkers();
-        var cities = getFilteredCities();
-        cities.forEach(function (city) {
-            var el = document.createElement('div');
-            el.className = 'marker';
-            var isCapital = city.category === 'capital';
-
-            var dot = document.createElement('div');
-            dot.className = 'marker__dot' + (isCapital ? ' marker__dot--capital' : '');
-            dot.style.borderColor = city.color;
-            dot.style.boxShadow = '0 0 8px ' + city.color + '90';
-
-            var label = document.createElement('span');
-            label.className = 'marker__label' + (isCapital ? ' marker__label--capital' : '');
-            label.textContent = currentLang === 'pl' ? city.nameLocal : city.name;
-            if (isCapital) { label.style.background = city.color; label.style.borderColor = city.color; }
-
-            el.appendChild(dot);
-            el.appendChild(label);
-            el.addEventListener('click', function (e) { e.stopPropagation(); selectCity(city); });
-
-            var m = new maplibregl.Marker({ element: el, anchor: 'center' })
-                .setLngLat(city.coordinates).addTo(map);
-            markers.push(m);
-        });
-    }
-    function clearMarkers() { markers.forEach(function (m) { m.remove(); }); markers.length = 0; }
-
-    // ─── City selection ──────────────────────────────
     function selectCity(city) {
+        if (!city) return;
         activeCity = city;
         if (rotateAnimId) { cancelAnimationFrame(rotateAnimId); rotateAnimId = null; }
 
@@ -422,41 +662,58 @@
         var lm = qs('#popupLandmarks');
         if (lm) lm.innerHTML = city.landmarks.map(function (l) { return '<span class="landmark-tag">' + l + '</span>'; }).join('');
 
-        qs('#cityPopup').classList.add('city-popup--visible');
+        var popup = qs('#cityPopup');
+        if (popup) popup.classList.add('city-popup--visible');
 
-        qsa('.city-card').forEach(function (c) { c.classList.toggle('city-card--active', +c.dataset.id === city.id); });
+        var cards = qsa('.city-card');
+        for (var i = 0; i < cards.length; i++) {
+            var card = cards[i];
+            if (+card.dataset.id === city.id) {
+                card.classList.add('city-card--active');
+            } else {
+                card.classList.remove('city-card--active');
+            }
+        }
+        
         var ac = qs('.city-card[data-id="' + city.id + '"]');
         if (ac) ac.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 
-        flyTo(city);
+        flyToOptimized(city);
     }
 
-    function flyTo(city) {
-        if (!map) return;
+    function flyToOptimized(city) {
+        if (!map || !city) return;
+        var zoom = city.category === 'capital' ? 12.5 : 11.5;
         map.flyTo({
             center: city.coordinates,
-            zoom: city.category === 'capital' ? 12 : 11,
-            pitch: is3D ? 60 : 0,
-            bearing: is3D ? 30 : 0,
-            duration: 2500,
+            zoom: zoom,
+            pitch: is3D ? 55 : 0,
+            bearing: is3D ? 25 : 0,
+            duration: 1500,
             essential: true
         });
     }
 
     function closePopup() {
-        qs('#cityPopup').classList.remove('city-popup--visible');
+        var popup = qs('#cityPopup');
+        if (popup) popup.classList.remove('city-popup--visible');
         activeCity = null;
-        qsa('.city-card').forEach(function (c) { c.classList.remove('city-card--active'); });
+        var cards = qsa('.city-card');
+        for (var i = 0; i < cards.length; i++) {
+            cards[i].classList.remove('city-card--active');
+        }
     }
 
-    // ─── City list render ────────────────────────────
     function renderCityList() {
         var $list = qs('#cityList');
+        if (!$list) return;
+        
         var cities = getFilteredCities();
 
         if (!cities.length) {
             $list.innerHTML = '<div class="empty-state"><p class="empty-state__title">Ничего не найдено</p><p class="empty-state__sub">Попробуйте изменить запрос</p></div>';
-            qs('#totalCities').textContent = '0';
+            var totalEl = qs('#totalCities');
+            if (totalEl) totalEl.textContent = '0';
             return;
         }
 
@@ -478,218 +735,286 @@
             '</div>';
         }
         $list.innerHTML = h;
-        qs('#totalCities').textContent = cities.length;
+        var totalEl = qs('#totalCities');
+        if (totalEl) totalEl.textContent = cities.length;
     }
 
     function animateStats() {
-        var tp = CITIES_DATA.reduce(function (s, c) { return s + c.population; }, 0);
-        animateValue(qs('#totalCities'), CITIES_DATA.length, 600);
-        animateValue(qs('#totalPopulation'), tp, 1000);
+        if (!window.CITIES_DATA) return;
+        var tp = window.CITIES_DATA.reduce(function (s, c) { return s + c.population; }, 0);
+        var totalEl = qs('#totalCities');
+        var popEl = qs('#totalPopulation');
+        if (totalEl) animateValue(totalEl, window.CITIES_DATA.length, 600);
+        if (popEl) animateValue(popEl, tp, 1000);
     }
 
-    // ═════════════════════════════════════════════════
-    // ALL BUTTON HANDLERS
-    // ═════════════════════════════════════════════════
-
+    // ─── All Button Handlers ─────────────────────────
     function initAllHandlers() {
+        var cityList = qs('#cityList');
+        if (cityList) {
+            cityList.addEventListener('click', function (e) {
+                var card = e.target.closest('.city-card');
+                if (!card) return;
+                if (!window.CITIES_DATA) return;
+                var city = window.CITIES_DATA.find(function (c) { return c.id === +card.dataset.id; });
+                if (city) selectCity(city);
+            });
+        }
 
-        qs('#cityList').addEventListener('click', function (e) {
-            var card = e.target.closest('.city-card');
-            if (!card) return;
-            var city = CITIES_DATA.find(function (c) { return c.id === +card.dataset.id; });
-            if (city) selectCity(city);
-        });
+        var filterBtns = qsa('.filter-btn');
+        for (var i = 0; i < filterBtns.length; i++) {
+            filterBtns[i].addEventListener('click', function (btn) {
+                return function() {
+                    var btns = qsa('.filter-btn');
+                    for (var j = 0; j < btns.length; j++) {
+                        btns[j].classList.remove('filter-btn--active');
+                    }
+                    btn.classList.add('filter-btn--active');
+                    currentFilter = btn.dataset.filter;
+                    renderCityList();
+                    syncMarkers();
+                };
+            }(filterBtns[i]));
+        }
 
-        qsa('.filter-btn').forEach(function (btn) {
-            btn.addEventListener('click', function () {
-                qsa('.filter-btn').forEach(function (b) { b.classList.remove('filter-btn--active'); });
-                btn.classList.add('filter-btn--active');
-                currentFilter = btn.dataset.filter;
+        var sortSelect = qs('#sortSelect');
+        if (sortSelect) {
+            sortSelect.addEventListener('change', function () {
+                currentSort = this.value;
+                renderCityList();
+            });
+        }
+
+        var searchInput = qs('#searchInput');
+        var searchTimer;
+        if (searchInput) {
+            searchInput.addEventListener('input', function () {
+                clearTimeout(searchTimer);
+                searchTimer = setTimeout(function () { renderCityList(); syncMarkers(); }, 300);
+            });
+        }
+
+        var zoomIn = qs('#zoomIn');
+        if (zoomIn) zoomIn.addEventListener('click', function () { map.zoomIn({ duration: 400 }); });
+        
+        var zoomOut = qs('#zoomOut');
+        if (zoomOut) zoomOut.addEventListener('click', function () { map.zoomOut({ duration: 400 }); });
+
+        var rotateBtn = qs('#rotateBtn');
+        if (rotateBtn) {
+            rotateBtn.addEventListener('click', function () {
+                is3D = !is3D;
+                if (is3D) {
+                    map.easeTo({ pitch: 55, bearing: map.getBearing() - 15, duration: 1200 });
+                    try { map.setTerrain({ source: 'terrainSource', exaggeration: 1.5 }); } catch (e) {}
+                } else {
+                    map.easeTo({ pitch: 0, bearing: 0, duration: 1200 });
+                    try { map.setTerrain(null); } catch (e) {}
+                }
+                this.style.color = is3D ? '#E63946' : '';
+            });
+        }
+
+        var resetBtn = qs('#resetBtn');
+        if (resetBtn) {
+            resetBtn.addEventListener('click', function () {
+                closePopup();
+                is3D = true;
+                var rotate = qs('#rotateBtn');
+                if (rotate) rotate.style.color = '';
+                try { map.setTerrain({ source: 'terrainSource', exaggeration: 1.5 }); } catch (e) {}
+                map.flyTo({ center: POLAND_CENTER, zoom: INITIAL_ZOOM, pitch: INITIAL_PITCH, bearing: INITIAL_BEARING, duration: 2000 });
                 renderCityList();
                 syncMarkers();
             });
-        });
+        }
 
-        qs('#sortSelect').addEventListener('change', function () {
-            currentSort = this.value;
-            renderCityList();
-        });
+        var styleBtns = qsa('.style-btn');
+        for (var i = 0; i < styleBtns.length; i++) {
+            styleBtns[i].addEventListener('click', function (btn) {
+                return function() {
+                    var s = btn.dataset.style;
+                    if (s === currentStyle) return;
+                    var btns = qsa('.style-btn');
+                    for (var j = 0; j < btns.length; j++) {
+                        btns[j].classList.remove('style-btn--active');
+                    }
+                    btn.classList.add('style-btn--active');
+                    currentStyle = s;
 
-        var searchTimer;
-        qs('#searchInput').addEventListener('input', function () {
-            clearTimeout(searchTimer);
-            searchTimer = setTimeout(function () { renderCityList(); syncMarkers(); }, 300);
-        });
+                    var cam = { center: map.getCenter(), zoom: map.getZoom(), pitch: map.getPitch(), bearing: map.getBearing() };
+                    removeCustomLayers();
+                    clearMarkers();
+                    map.setStyle(getStyleForMode(s));
 
-        qs('#zoomIn').addEventListener('click', function () { map.zoomIn({ duration: 400 }); });
-        qs('#zoomOut').addEventListener('click', function () { map.zoomOut({ duration: 400 }); });
+                    map.once('style.load', function () {
+                        map.jumpTo(cam);
+                        onStyleReady();
+                    });
+                };
+            }(styleBtns[i]));
+        }
 
-        qs('#rotateBtn').addEventListener('click', function () {
-            is3D = !is3D;
-            if (is3D) {
-                map.easeTo({ pitch: 55, bearing: map.getBearing() - 15, duration: 1200 });
-                try { map.setTerrain({ source: 'terrainSource', exaggeration: 1.5 }); } catch (e) {}
-            } else {
-                map.easeTo({ pitch: 0, bearing: 0, duration: 1200 });
-                try { map.setTerrain(null); } catch (e) {}
-            }
-            this.style.color = is3D ? '#E63946' : '';
-        });
+        var closePopupBtn = qs('#closePopup');
+        if (closePopupBtn) closePopupBtn.addEventListener('click', function () { closePopup(); });
+        
+        var flyToCity = qs('#flyToCity');
+        if (flyToCity) flyToCity.addEventListener('click', function () { if (activeCity) flyToOptimized(activeCity); });
 
-        qs('#resetBtn').addEventListener('click', function () {
-            closePopup();
-            is3D = true;
-            qs('#rotateBtn').style.color = '';
-            try { map.setTerrain({ source: 'terrainSource', exaggeration: 1.5 }); } catch (e) {}
-            map.flyTo({ center: POLAND_CENTER, zoom: INITIAL_ZOOM, pitch: INITIAL_PITCH, bearing: INITIAL_BEARING, duration: 2000 });
-        });
-
-        // ── Style switcher ───────────────────────────
-        qsa('.style-btn').forEach(function (btn) {
-            btn.addEventListener('click', function () {
-                var s = btn.dataset.style;
-                if (s === currentStyle) return;
-                qsa('.style-btn').forEach(function (b) { b.classList.remove('style-btn--active'); });
-                btn.classList.add('style-btn--active');
-                currentStyle = s;
-
-                var cam = { center: map.getCenter(), zoom: map.getZoom(), pitch: map.getPitch(), bearing: map.getBearing() };
-                removeCustomLayers();
-                clearMarkers();
-                map.setStyle(getStyleForMode(s));
-
-                map.once('style.load', function () {
-                    map.jumpTo(cam);
-                    onStyleReady();
-                });
+        var langBtn = qs('#langBtn');
+        if (langBtn) {
+            langBtn.addEventListener('click', function () {
+                currentLang = currentLang === 'ru' ? 'pl' : 'ru';
+                var span = this.querySelector('span');
+                if (span) span.textContent = currentLang.toUpperCase();
+                renderCityList();
+                syncMarkers();
             });
-        });
+        }
 
-        qs('#closePopup').addEventListener('click', function () { closePopup(); });
-        qs('#flyToCity').addEventListener('click', function () { if (activeCity) flyTo(activeCity); });
-
-        qs('#langBtn').addEventListener('click', function () {
-            currentLang = currentLang === 'ru' ? 'pl' : 'ru';
-            this.querySelector('span').textContent = currentLang.toUpperCase();
-            renderCityList();
-            syncMarkers();
-        });
-
+        var navLinks = qsa('.nav__link');
         var navSections = ['map', 'cities', 'realty', 'analytics'];
-        qsa('.nav__link').forEach(function (link, idx) {
-            link.addEventListener('click', function (e) {
-                e.preventDefault();
-                qsa('.nav__link').forEach(function (l) { l.classList.remove('nav__link--active'); });
-                link.classList.add('nav__link--active');
-                currentNav = navSections[idx] || 'map';
-                handleNavChange(currentNav);
-            });
-        });
+        for (var i = 0; i < navLinks.length; i++) {
+            navLinks[i].addEventListener('click', function(idx) {
+                return function(e) {
+                    e.preventDefault();
+                    var links = qsa('.nav__link');
+                    for (var j = 0; j < links.length; j++) {
+                        links[j].classList.remove('nav__link--active');
+                    }
+                    navLinks[idx].classList.add('nav__link--active');
+                    currentNav = navSections[idx] || 'map';
+                    handleNavChange(currentNav);
+                };
+            }(i));
+        }
 
-        qs('.logo').addEventListener('click', function (e) {
-            e.preventDefault();
-            qsa('.nav__link').forEach(function (l) { l.classList.remove('nav__link--active'); });
-            var first = qs('.nav__link');
-            if (first) first.classList.add('nav__link--active');
-            currentNav = 'map';
-            currentFilter = 'all';
-            qsa('.filter-btn').forEach(function (b) { b.classList.remove('filter-btn--active'); });
-            var allBtn = qs('.filter-btn[data-filter="all"]');
-            if (allBtn) allBtn.classList.add('filter-btn--active');
-            qs('#searchInput').value = '';
-            qs('#sortSelect').value = 'population';
-            currentSort = 'population';
-            closePopup();
-            is3D = true;
-            qs('#rotateBtn').style.color = '';
-            try { map.setTerrain({ source: 'terrainSource', exaggeration: 1.5 }); } catch (e) {}
-            renderCityList();
-            syncMarkers();
-            map.flyTo({ center: POLAND_CENTER, zoom: INITIAL_ZOOM, pitch: INITIAL_PITCH, bearing: INITIAL_BEARING, duration: 2000 });
-        });
+        var logo = qs('.logo');
+        if (logo) {
+            logo.addEventListener('click', function (e) {
+                e.preventDefault();
+                var links = qsa('.nav__link');
+                for (var i = 0; i < links.length; i++) {
+                    links[i].classList.remove('nav__link--active');
+                }
+                var first = qs('.nav__link');
+                if (first) first.classList.add('nav__link--active');
+                currentNav = 'map';
+                currentFilter = 'all';
+                var filterBtns = qsa('.filter-btn');
+                for (var i = 0; i < filterBtns.length; i++) {
+                    filterBtns[i].classList.remove('filter-btn--active');
+                }
+                var allBtn = qs('.filter-btn[data-filter="all"]');
+                if (allBtn) allBtn.classList.add('filter-btn--active');
+                var search = qs('#searchInput');
+                if (search) search.value = '';
+                var sort = qs('#sortSelect');
+                if (sort) sort.value = 'population';
+                currentSort = 'population';
+                closePopup();
+                is3D = true;
+                var rotate = qs('#rotateBtn');
+                if (rotate) rotate.style.color = '';
+                try { map.setTerrain({ source: 'terrainSource', exaggeration: 1.5 }); } catch (e) {}
+                renderCityList();
+                syncMarkers();
+                map.flyTo({ center: POLAND_CENTER, zoom: INITIAL_ZOOM, pitch: INITIAL_PITCH, bearing: INITIAL_BEARING, duration: 2000 });
+            });
+        }
 
         document.addEventListener('keydown', function (e) {
-            if (e.key === 'Escape') { closePopup(); qs('#searchInput').blur(); }
-            if (e.key === '/' && document.activeElement !== qs('#searchInput')) { e.preventDefault(); qs('#searchInput').focus(); }
+            if (e.key === 'Escape') { closePopup(); if (searchInput) searchInput.blur(); }
+            if (e.key === '/' && document.activeElement !== searchInput) { e.preventDefault(); if (searchInput) searchInput.focus(); }
         });
 
-        map.on('click', function () { if (activeCity) closePopup(); });
+        if (map) map.on('click', function () { if (activeCity) closePopup(); });
     }
 
-    // ─── Nav section handler ─────────────────────────
     function handleNavChange(section) {
         var filtersEl = qs('.sidebar__filters');
         var sortEl = qs('.sidebar__sort');
+        var titleEl = qs('.sidebar__title');
+        var subtitleEl = qs('.sidebar__subtitle');
+        var cityList = qs('#cityList');
+
+        if (!cityList) return;
 
         switch (section) {
             case 'map':
-                qs('.sidebar__title').textContent = 'Крупные города Польши';
-                qs('.sidebar__subtitle').textContent = '3D карта — выберите город';
+                if (titleEl) titleEl.textContent = 'Крупные города Польши';
+                if (subtitleEl) subtitleEl.textContent = '3D карта — выберите город';
                 if (filtersEl) filtersEl.style.display = '';
                 if (sortEl) sortEl.style.display = '';
                 currentFilter = 'all';
-                qsa('.filter-btn').forEach(function (b) { b.classList.remove('filter-btn--active'); });
-                var ab = qs('.filter-btn[data-filter="all"]'); if (ab) ab.classList.add('filter-btn--active');
+                var filterBtns = qsa('.filter-btn');
+                for (var i = 0; i < filterBtns.length; i++) {
+                    filterBtns[i].classList.remove('filter-btn--active');
+                }
+                var allBtn = qs('.filter-btn[data-filter="all"]');
+                if (allBtn) allBtn.classList.add('filter-btn--active');
                 renderCityList();
                 syncMarkers();
                 map.flyTo({ center: POLAND_CENTER, zoom: INITIAL_ZOOM, pitch: INITIAL_PITCH, bearing: INITIAL_BEARING, duration: 2000 });
                 break;
 
             case 'cities':
-                qs('.sidebar__title').textContent = 'Все города';
-                qs('.sidebar__subtitle').textContent = 'Список всех городов Польши';
+                if (titleEl) titleEl.textContent = 'Все города';
+                if (subtitleEl) subtitleEl.textContent = 'Список всех городов Польши';
                 if (filtersEl) filtersEl.style.display = '';
                 if (sortEl) sortEl.style.display = '';
                 currentFilter = 'all';
-                qsa('.filter-btn').forEach(function (b) { b.classList.remove('filter-btn--active'); });
-                var ab2 = qs('.filter-btn[data-filter="all"]'); if (ab2) ab2.classList.add('filter-btn--active');
+                var filterBtns2 = qsa('.filter-btn');
+                for (var i = 0; i < filterBtns2.length; i++) {
+                    filterBtns2[i].classList.remove('filter-btn--active');
+                }
+                var allBtn2 = qs('.filter-btn[data-filter="all"]');
+                if (allBtn2) allBtn2.classList.add('filter-btn--active');
                 renderCityList();
                 syncMarkers();
                 break;
 
             case 'realty':
-                qs('.sidebar__title').textContent = 'Недвижимость';
-                qs('.sidebar__subtitle').textContent = 'Обзор рынка недвижимости Польши';
+                if (titleEl) titleEl.textContent = 'Недвижимость';
+                if (subtitleEl) subtitleEl.textContent = 'Обзор рынка недвижимости Польши';
                 if (filtersEl) filtersEl.style.display = 'none';
                 if (sortEl) sortEl.style.display = 'none';
-                qs('#cityList').innerHTML =
-                    '<div class="empty-state">' +
-                    '<p class="empty-state__title">🏠 Раздел в разработке</p>' +
-                    '<p class="empty-state__sub">Данные о недвижимости скоро появятся</p>' +
-                    '</div>';
+                cityList.innerHTML = '<div class="empty-state"><p class="empty-state__title">🏠 Раздел в разработке</p><p class="empty-state__sub">Данные о недвижимости скоро появятся</p></div>';
                 break;
 
             case 'analytics':
-                qs('.sidebar__title').textContent = 'Аналитика';
-                qs('.sidebar__subtitle').textContent = 'Статистика и данные';
+                if (!window.CITIES_DATA) break;
+                if (titleEl) titleEl.textContent = 'Аналитика';
+                if (subtitleEl) subtitleEl.textContent = 'Статистика и данные';
                 if (filtersEl) filtersEl.style.display = 'none';
                 if (sortEl) sortEl.style.display = 'none';
-                var totalPop = CITIES_DATA.reduce(function (s, c) { return s + c.population; }, 0);
-                var avgPop = Math.round(totalPop / CITIES_DATA.length);
-                var biggest = CITIES_DATA.slice().sort(function (a, b) { return b.population - a.population; })[0];
-                var smallest = CITIES_DATA.slice().sort(function (a, b) { return a.population - b.population; })[0];
-                var totalArea = CITIES_DATA.reduce(function (s, c) { return s + c.area; }, 0);
-                qs('#cityList').innerHTML =
-                    '<div style="padding:16px 8px;">' +
+                var totalPop = window.CITIES_DATA.reduce(function (s, c) { return s + c.population; }, 0);
+                var avgPop = Math.round(totalPop / window.CITIES_DATA.length);
+                var biggest = window.CITIES_DATA.slice().sort(function (a, b) { return b.population - a.population; })[0];
+                var smallest = window.CITIES_DATA.slice().sort(function (a, b) { return a.population - b.population; })[0];
+                var totalArea = window.CITIES_DATA.reduce(function (s, c) { return s + c.area; }, 0);
+                cityList.innerHTML = '<div style="padding:16px 8px;">' +
                     '<div class="stat-card" style="margin-bottom:10px;padding:16px;text-align:left;"><div class="stat-card__label">Общее население</div><div class="stat-card__value">' + fmtFull(totalPop) + '</div></div>' +
                     '<div class="stat-card" style="margin-bottom:10px;padding:16px;text-align:left;"><div class="stat-card__label">Среднее население города</div><div class="stat-card__value">' + fmtFull(avgPop) + '</div></div>' +
                     '<div class="stat-card" style="margin-bottom:10px;padding:16px;text-align:left;"><div class="stat-card__label">Крупнейший город</div><div class="stat-card__value" style="font-size:15px;">' + biggest.name + ' (' + fmtFull(biggest.population) + ')</div></div>' +
                     '<div class="stat-card" style="margin-bottom:10px;padding:16px;text-align:left;"><div class="stat-card__label">Наименьший город</div><div class="stat-card__value" style="font-size:15px;">' + smallest.name + ' (' + fmtFull(smallest.population) + ')</div></div>' +
                     '<div class="stat-card" style="margin-bottom:10px;padding:16px;text-align:left;"><div class="stat-card__label">Общая площадь городов</div><div class="stat-card__value">' + fmtFull(Math.round(totalArea)) + ' км²</div></div>' +
-                    '<div class="stat-card" style="margin-bottom:10px;padding:16px;text-align:left;"><div class="stat-card__label">Количество городов</div><div class="stat-card__value">' + CITIES_DATA.length + '</div></div>' +
+                    '<div class="stat-card" style="margin-bottom:10px;padding:16px;text-align:left;"><div class="stat-card__label">Количество городов</div><div class="stat-card__value">' + window.CITIES_DATA.length + '</div></div>' +
                     '</div>';
                 break;
         }
     }
 
-    // ═════════════════════════════════════════════════
-    // BOOT
-    // ═════════════════════════════════════════════════
+    // ─── Boot ────────────────────────────────────────
     function boot() {
+        if (typeof maplibregl === 'undefined') {
+            console.error('MapLibre GL not loaded');
+            return;
+        }
         setLoading(10);
         initMap();
         renderCityList();
-        map.on('load', function () { initAllHandlers(); });
+        if (map) map.on('load', function () { initAllHandlers(); });
     }
 
     if (document.readyState === 'loading') {
