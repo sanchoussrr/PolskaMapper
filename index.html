@@ -1,519 +1,632 @@
 <!DOCTYPE html>
-<html lang="ru">
+<html lang="uk">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Польша — 3D карта с домами (360°)</title>
-    
-    <!-- MapLibre GL JS -->
-    <script src="https://unpkg.com/maplibre-gl@5.2.0/dist/maplibre-gl.js"></script>
-    <link href="https://unpkg.com/maplibre-gl@5.2.0/dist/maplibre-gl.css" rel="stylesheet" />
-    
+    <title>Polska Mapper — 3D Realistic</title>
+    <link href="https://cdn.jsdelivr.net/npm/maplibre-gl@4.7.1/dist/maplibre-gl.css" rel="stylesheet" />
+    <script src="https://cdn.jsdelivr.net/npm/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
     <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
 
         body {
-            width: 100vw;
-            height: 100vh;
-            overflow: hidden;
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            background: #000;
+            width: 100vw; height: 100vh; overflow: hidden;
+            font-family: 'Segoe UI', system-ui, sans-serif;
+            background: #1a1a2e;
         }
 
-        #map {
-            width: 100%;
-            height: 100%;
-            position: absolute;
-            top: 0;
-            left: 0;
-        }
+        #map { width: 100%; height: 100%; position: absolute; top: 0; left: 0; }
 
-        /* Экран загрузки */
+        /* ── Loading ── */
         .loading-screen {
-            position: fixed;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
-            background: #ffffff;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            justify-content: center;
-            z-index: 1000;
-            transition: opacity 0.5s ease, visibility 0.5s ease;
+            position: fixed; inset: 0;
+            background: #0f0f1a;
+            display: flex; flex-direction: column;
+            align-items: center; justify-content: center;
+            z-index: 2000;
+            transition: opacity 0.6s ease, visibility 0.6s ease;
         }
-
-        .loading-screen--hidden {
-            opacity: 0;
-            visibility: hidden;
-        }
-
+        .loading-screen.hidden { opacity: 0; visibility: hidden; pointer-events: none; }
         .loading-logo {
-            font-size: 32px;
-            font-weight: 700;
-            color: #1a1a1a;
-            margin-bottom: 20px;
-            letter-spacing: -1px;
+            font-size: 28px; font-weight: 800; letter-spacing: 3px;
+            color: #fff; margin-bottom: 8px;
         }
+        .loading-sub { font-size: 12px; color: #666; letter-spacing: 2px; margin-bottom: 28px; }
+        .loading-bar-wrap { width: 220px; height: 2px; background: #222; border-radius: 2px; overflow: hidden; }
+        .loading-bar { height: 100%; width: 0%; background: linear-gradient(90deg, #4a9eff, #a78bfa); transition: width 0.3s ease; }
 
-        .loading-progress {
-            width: 200px;
-            height: 3px;
-            background: #e0e0e0;
-            border-radius: 2px;
-            overflow: hidden;
-        }
-
-        .loading-progress__bar {
-            height: 100%;
-            width: 0%;
-            background: #1a1a1a;
-            border-radius: 2px;
-            transition: width 0.3s ease;
-        }
-
-        /* Подсказка по управлению */
-        .controls-hint {
-            position: fixed;
-            bottom: 20px;
-            left: 50%;
-            transform: translateX(-50%);
-            background: rgba(0, 0, 0, 0.7);
-            color: #fff;
-            padding: 8px 16px;
-            border-radius: 20px;
-            font-size: 12px;
-            z-index: 100;
-            pointer-events: none;
-            opacity: 0.8;
-            transition: opacity 0.3s ease;
-        }
-
-        .controls-hint:hover {
-            opacity: 0;
-        }
-
-        /* Кнопка сброса вида */
+        /* ── Reset Button ── */
         .reset-btn {
-            position: fixed;
-            top: 20px;
-            right: 20px;
-            width: 40px;
-            height: 40px;
-            background: white;
-            border: none;
-            border-radius: 8px;
-            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+            position: fixed; top: 16px; right: 16px;
+            width: 42px; height: 42px;
+            background: rgba(255,255,255,0.95);
+            border: none; border-radius: 10px;
+            box-shadow: 0 2px 12px rgba(0,0,0,0.2);
+            cursor: pointer; z-index: 500;
+            display: flex; align-items: center; justify-content: center;
+            transition: transform 0.15s, box-shadow 0.15s;
+        }
+        .reset-btn:hover { transform: scale(1.08); box-shadow: 0 4px 16px rgba(0,0,0,0.28); }
+        .reset-btn:active { transform: scale(0.94); }
+        .reset-btn svg { width: 18px; height: 18px; color: #333; }
+
+        /* ── Controls Hint ── */
+        .hint {
+            position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%);
+            background: rgba(0,0,0,0.65); backdrop-filter: blur(8px);
+            color: rgba(255,255,255,0.85); padding: 7px 16px;
+            border-radius: 20px; font-size: 11px; z-index: 100;
+            pointer-events: none; white-space: nowrap;
+        }
+
+        /* ── POI Filter Panel ── */
+        .poi-panel {
+            position: fixed; top: 16px; left: 16px;
+            width: 230px;
+            background: rgba(15, 15, 26, 0.92);
+            backdrop-filter: blur(14px);
+            border: 1px solid rgba(255,255,255,0.1);
+            border-radius: 14px;
+            box-shadow: 0 8px 32px rgba(0,0,0,0.4);
+            z-index: 500;
+            overflow: hidden;
+            transition: max-height 0.3s ease;
+        }
+
+        .poi-header {
+            display: flex; align-items: center; justify-content: space-between;
+            padding: 12px 14px;
             cursor: pointer;
-            z-index: 100;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            transition: transform 0.2s ease, box-shadow 0.2s ease;
+            user-select: none;
+            border-bottom: 1px solid rgba(255,255,255,0.07);
+        }
+        .poi-header-title {
+            font-size: 12px; font-weight: 700; color: #fff;
+            letter-spacing: 1.5px; text-transform: uppercase;
+        }
+        .poi-toggle-arrow {
+            width: 20px; height: 20px; color: rgba(255,255,255,0.5);
+            transition: transform 0.25s ease;
+        }
+        .poi-panel.collapsed .poi-toggle-arrow { transform: rotate(-90deg); }
+
+        .poi-body {
+            max-height: 420px;
+            overflow-y: auto;
+            padding: 8px 0;
+            transition: max-height 0.3s ease, opacity 0.3s ease;
+        }
+        .poi-panel.collapsed .poi-body { max-height: 0; opacity: 0; overflow: hidden; }
+
+        .poi-body::-webkit-scrollbar { width: 4px; }
+        .poi-body::-webkit-scrollbar-track { background: transparent; }
+        .poi-body::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.15); border-radius: 2px; }
+
+        .poi-group-label {
+            font-size: 9px; font-weight: 700; color: rgba(255,255,255,0.3);
+            letter-spacing: 1.5px; text-transform: uppercase;
+            padding: 8px 14px 4px;
         }
 
-        .reset-btn:hover {
-            transform: scale(1.05);
-            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+        .poi-item {
+            display: flex; align-items: center; gap: 10px;
+            padding: 6px 14px;
+            cursor: pointer;
+            border-radius: 0;
+            transition: background 0.15s;
         }
+        .poi-item:hover { background: rgba(255,255,255,0.06); }
 
-        .reset-btn:active {
-            transform: scale(0.95);
-        }
+        .poi-item input[type=checkbox] { display: none; }
 
-        .reset-btn svg {
-            width: 18px;
-            height: 18px;
-            color: #333;
+        .poi-checkbox {
+            width: 16px; height: 16px; border-radius: 4px;
+            border: 1.5px solid rgba(255,255,255,0.25);
+            flex-shrink: 0;
+            display: flex; align-items: center; justify-content: center;
+            transition: background 0.15s, border-color 0.15s;
         }
+        .poi-item.active .poi-checkbox {
+            background: var(--poi-color, #4a9eff);
+            border-color: var(--poi-color, #4a9eff);
+        }
+        .poi-checkbox svg { width: 10px; height: 10px; color: #fff; opacity: 0; transition: opacity 0.15s; }
+        .poi-item.active .poi-checkbox svg { opacity: 1; }
 
-        @media (max-width: 768px) {
-            .controls-hint {
-                bottom: 30px;
-                font-size: 11px;
-                padding: 6px 12px;
-            }
-            
-            .reset-btn {
-                top: 10px;
-                right: 10px;
-            }
+        .poi-icon { font-size: 14px; width: 20px; text-align: center; }
+
+        .poi-label {
+            font-size: 12px; color: rgba(255,255,255,0.75);
+            flex: 1;
         }
+        .poi-item.active .poi-label { color: #fff; }
+
+        .poi-select-all {
+            display: flex; align-items: center; justify-content: space-between;
+            padding: 6px 14px 10px;
+            border-top: 1px solid rgba(255,255,255,0.07);
+            margin-top: 4px;
+        }
+        .poi-btn {
+            font-size: 10px; color: rgba(255,255,255,0.45);
+            cursor: pointer; letter-spacing: 0.5px;
+            padding: 3px 6px; border-radius: 4px;
+            transition: color 0.15s, background 0.15s;
+        }
+        .poi-btn:hover { color: #fff; background: rgba(255,255,255,0.08); }
+
     </style>
 </head>
 <body>
-    <!-- Экран загрузки -->
-    <div class="loading-screen" id="loadingScreen">
-        <div class="loading-logo">POLSKA MAPPER</div>
-        <div class="loading-progress">
-            <div class="loading-progress__bar" id="loadingBar"></div>
-        </div>
-    </div>
 
-    <!-- Карта -->
-    <div id="map"></div>
+<!-- Loading -->
+<div class="loading-screen" id="loadingScreen">
+    <div class="loading-logo">POLSKA MAPPER</div>
+    <div class="loading-sub">3D REALISTIC VIEW</div>
+    <div class="loading-bar-wrap"><div class="loading-bar" id="loadingBar"></div></div>
+</div>
 
-    <!-- Подсказка -->
-    <div class="controls-hint">
-        🖱️ Средняя кнопка мыши или ПКМ + движение — вращение 360° &nbsp;|&nbsp; Пробел — авто-вращение
-    </div>
+<!-- Map -->
+<div id="map"></div>
 
-    <!-- Кнопка сброса -->
-    <button class="reset-btn" id="resetBtn" title="Сбросить вид">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/>
-            <path d="M3 3v5h5"/>
+<!-- POI Filter Panel -->
+<div class="poi-panel" id="poiPanel">
+    <div class="poi-header" id="poiHeader">
+        <span class="poi-header-title">📍 Фільтр місць</span>
+        <svg class="poi-toggle-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+            <polyline points="6 9 12 15 18 9"/>
         </svg>
-    </button>
+    </div>
+    <div class="poi-body" id="poiBody">
+        <!-- dynamically filled -->
+    </div>
+</div>
 
-    <script>
-        // =====================================================
-        // PolskaMapper — White Map (3D Buildings + 360°)
-        // =====================================================
+<!-- Reset -->
+<button class="reset-btn" id="resetBtn" title="Скинути вид">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/>
+        <path d="M3 3v5h5"/>
+    </svg>
+</button>
 
-        (function () {
-            'use strict';
+<!-- Hint -->
+<div class="hint">🖱️ ПКМ + рух — обертання 360° &nbsp;|&nbsp; Пробел — авто-обертання</div>
 
-            var CONFIG = {
-                MAX_TILE_CACHE_SIZE: 200,
-                TILE_CACHE_CLEAN_INTERVAL: 60000,
-                FPS_THROTTLE: 60,
-                BUILDINGS_MIN_ZOOM: 14,
-                MAX_BUILDING_HEIGHT: 100,
-                BUILDING_OPACITY: 0.9,
-                ROTATION_SPEED: 0.3,
-                ENABLE_360_ROTATION: true,
-                ENABLE_PERFORMANCE_MODE: true
-            };
+<script>
+(function () {
+'use strict';
 
-            var OFM_LIBERTY = 'https://tiles.openfreemap.org/styles/liberty';
-            var TERRAIN_URL = 'https://demotiles.maplibre.org/terrain-tiles/tiles.json';
+// ── Config ──────────────────────────────────────────────
+var CENTER = [19.4, 51.9];
+var INIT_ZOOM = 6.2, INIT_PITCH = 55, INIT_BEARING = -15;
 
-            var POLAND_CENTER = [19.4, 51.9];
-            var INITIAL_ZOOM  = 6.2;
-            var INITIAL_PITCH = 55;
-            var INITIAL_BEARING = -15;
+// Maptiler key - free tier, for realistic style
+var STYLE_URL = 'https://tiles.openfreemap.org/styles/liberty';
 
-            var map = null;
-            var isRotating = false;
-            var rotationFrameId = null;
+var map, rotationId = null;
 
-            function qs(sel) { return document.querySelector(sel); }
+// ── POI Categories ───────────────────────────────────────
+var POI_GROUPS = [
+    {
+        label: 'Транспорт',
+        color: '#4a9eff',
+        items: [
+            { id: 'subway_station',   icon: '🚇', label: 'Метро',          layers: ['poi-transit-subway'] },
+            { id: 'bus_stop',         icon: '🚌', label: 'Автобусні зупинки', layers: ['poi-transit-bus'] },
+            { id: 'railway_station',  icon: '🚆', label: 'Залізнична станція', layers: ['poi-transit-rail'] },
+            { id: 'parking',          icon: '🅿️', label: 'Паркінг',         layers: ['poi-parking'] },
+            { id: 'fuel',             icon: '⛽', label: 'АЗС',             layers: ['poi-fuel'] },
+        ]
+    },
+    {
+        label: 'Їжа та напої',
+        color: '#f97316',
+        items: [
+            { id: 'restaurant',  icon: '🍽️', label: 'Ресторани',  layers: ['poi-food-restaurant'] },
+            { id: 'cafe',        icon: '☕', label: 'Кав\'ярні',   layers: ['poi-food-cafe'] },
+            { id: 'fast_food',   icon: '🍔', label: 'Фастфуд',    layers: ['poi-food-fastfood'] },
+            { id: 'bar',         icon: '🍺', label: 'Бари',        layers: ['poi-food-bar'] },
+            { id: 'bakery',      icon: '🥐', label: 'Пекарні',    layers: ['poi-food-bakery'] },
+        ]
+    },
+    {
+        label: 'Покупки',
+        color: '#a78bfa',
+        items: [
+            { id: 'supermarket', icon: '🛒', label: 'Супермаркети', layers: ['poi-shop-supermarket'] },
+            { id: 'mall',        icon: '🏬', label: 'Торгові центри', layers: ['poi-shop-mall'] },
+            { id: 'pharmacy',    icon: '💊', label: 'Аптеки',       layers: ['poi-shop-pharmacy'] },
+            { id: 'clothes',     icon: '👕', label: 'Одяг',          layers: ['poi-shop-clothes'] },
+            { id: 'electronics', icon: '📱', label: 'Електроніка',   layers: ['poi-shop-electronics'] },
+        ]
+    },
+    {
+        label: 'Фінанси',
+        color: '#22c55e',
+        items: [
+            { id: 'bank',    icon: '🏦', label: 'Банки',   layers: ['poi-finance-bank'] },
+            { id: 'atm',     icon: '💳', label: 'Банкомати', layers: ['poi-finance-atm'] },
+        ]
+    },
+    {
+        label: 'Здоров\'я',
+        color: '#ef4444',
+        items: [
+            { id: 'hospital', icon: '🏥', label: 'Лікарні',   layers: ['poi-health-hospital'] },
+            { id: 'clinic',   icon: '🩺', label: 'Клініки',   layers: ['poi-health-clinic'] },
+            { id: 'dentist',  icon: '🦷', label: 'Стоматологія', layers: ['poi-health-dentist'] },
+            { id: 'vet',      icon: '🐾', label: 'Ветеринарні', layers: ['poi-health-vet'] },
+        ]
+    },
+    {
+        label: 'Освіта',
+        color: '#f59e0b',
+        items: [
+            { id: 'school',      icon: '🏫', label: 'Школи',       layers: ['poi-edu-school'] },
+            { id: 'university',  icon: '🎓', label: 'Університети', layers: ['poi-edu-university'] },
+            { id: 'kindergarten',icon: '🧸', label: 'Дитсадки',    layers: ['poi-edu-kindergarten'] },
+            { id: 'library',     icon: '📚', label: 'Бібліотеки',  layers: ['poi-edu-library'] },
+        ]
+    },
+    {
+        label: 'Розваги та культура',
+        color: '#ec4899',
+        items: [
+            { id: 'hotel',       icon: '🏨', label: 'Готелі',       layers: ['poi-accom-hotel'] },
+            { id: 'museum',      icon: '🏛️', label: 'Музеї',        layers: ['poi-culture-museum'] },
+            { id: 'theatre',     icon: '🎭', label: 'Театри',       layers: ['poi-culture-theatre'] },
+            { id: 'cinema',      icon: '🎬', label: 'Кінотеатри',   layers: ['poi-culture-cinema'] },
+            { id: 'park',        icon: '🌳', label: 'Парки',         layers: ['poi-leisure-park'] },
+            { id: 'sport',       icon: '⚽', label: 'Спорт',        layers: ['poi-leisure-sport'] },
+        ]
+    },
+    {
+        label: 'Послуги',
+        color: '#64748b',
+        items: [
+            { id: 'police',       icon: '👮', label: 'Поліція',      layers: ['poi-service-police'] },
+            { id: 'fire_station', icon: '🚒', label: 'Пожежна',     layers: ['poi-service-fire'] },
+            { id: 'post_office',  icon: '📮', label: 'Пошта',       layers: ['poi-service-post'] },
+            { id: 'place_of_worship', icon: '⛪', label: 'Церкви/Храми', layers: ['poi-worship'] },
+            { id: 'toilet',       icon: '🚻', label: 'Туалети',      layers: ['poi-toilet'] },
+        ]
+    },
+];
 
-            function throttleRAF(callback) {
-                var lastTime = 0;
-                var throttleTime = 1000 / CONFIG.FPS_THROTTLE;
-                return function() {
-                    var now = performance.now();
-                    if (now - lastTime >= throttleTime) {
-                        lastTime = now;
-                        callback.apply(this, arguments);
-                    }
-                };
-            }
+// Track state: all enabled by default
+var poiState = {};
+POI_GROUPS.forEach(function(g) {
+    g.items.forEach(function(item) { poiState[item.id] = true; });
+});
 
-            function setLoading(pct) { 
-                var bar = qs('#loadingBar');
-                if (bar) bar.style.width = pct + '%'; 
-            }
-            
-            function hideLoading() {
-                setLoading(100);
-                setTimeout(function () { 
-                    var screen = qs('#loadingScreen');
-                    if (screen) screen.classList.add('loading-screen--hidden'); 
-                }, 400);
-            }
+// ── Loading ──────────────────────────────────────────────
+function setLoading(pct) {
+    var bar = document.getElementById('loadingBar');
+    if (bar) bar.style.width = pct + '%';
+}
+function hideLoading() {
+    setLoading(100);
+    setTimeout(function() {
+        var s = document.getElementById('loadingScreen');
+        if (s) s.classList.add('hidden');
+    }, 400);
+}
 
-            // ─── 360° Rotation ─────────────────
-            function enableFullRotation() {
-                if (!CONFIG.ENABLE_360_ROTATION) return;
-                
-                var isDragging = false;
-                var lastX = 0;
-                
-                map.on('mousedown', function(e) {
-                    if (e.originalEvent.button === 1 || e.originalEvent.button === 2) {
-                        e.preventDefault();
-                        isDragging = true;
-                        lastX = e.point.x;
-                        if (rotationFrameId) {
-                            cancelAnimationFrame(rotationFrameId);
-                            rotationFrameId = null;
-                            isRotating = false;
-                        }
-                    }
-                });
+// ── Build POI Panel ──────────────────────────────────────
+function buildPoiPanel() {
+    var body = document.getElementById('poiBody');
+    var html = '';
 
-                map.on('mousemove', throttleRAF(function(e) {
-                    if (isDragging) {
-                        var delta = e.point.x - lastX;
-                        var newBearing = (map.getBearing() + delta * CONFIG.ROTATION_SPEED) % 360;
-                        map.setBearing(newBearing);
-                        lastX = e.point.x;
-                    }
-                }));
+    POI_GROUPS.forEach(function(group) {
+        html += '<div class="poi-group-label">' + group.label + '</div>';
+        group.items.forEach(function(item) {
+            html += '<label class="poi-item active" data-id="' + item.id + '" style="--poi-color:' + group.color + '">' +
+                '<span class="poi-icon">' + item.icon + '</span>' +
+                '<span class="poi-label">' + item.label + '</span>' +
+                '<span class="poi-checkbox"><svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="2 6 5 9 10 3"/></svg></span>' +
+            '</label>';
+        });
+    });
 
-                map.on('mouseup', function() {
-                    isDragging = false;
-                });
+    html += '<div class="poi-select-all">' +
+        '<span class="poi-btn" id="btnAll">Всі</span>' +
+        '<span class="poi-btn" id="btnNone">Жодного</span>' +
+    '</div>';
 
-                document.addEventListener('keydown', function(e) {
-                    if (e.code === 'Space') {
-                        e.preventDefault();
-                        toggleAutoRotation();
-                    }
-                });
-            }
+    body.innerHTML = html;
 
-            function toggleAutoRotation() {
-                if (rotationFrameId) {
-                    cancelAnimationFrame(rotationFrameId);
-                    rotationFrameId = null;
-                    isRotating = false;
-                    return;
-                }
-                
-                isRotating = true;
-                var rotationSpeed = 0.15;
-                var lastTimestamp = null;
-                
-                function rotateFrame(timestamp) {
-                    if (!isRotating) return;
-                    if (lastTimestamp) {
-                        var delta = Math.min(timestamp - lastTimestamp, 100) / 1000;
-                        var newBearing = (map.getBearing() + rotationSpeed * delta * 30) % 360;
-                        map.setBearing(newBearing);
-                    }
-                    lastTimestamp = timestamp;
-                    rotationFrameId = requestAnimationFrame(rotateFrame);
-                }
-                
-                rotationFrameId = requestAnimationFrame(rotateFrame);
-            }
+    // Item click
+    body.querySelectorAll('.poi-item').forEach(function(el) {
+        el.addEventListener('click', function() {
+            var id = el.dataset.id;
+            poiState[id] = !poiState[id];
+            el.classList.toggle('active', poiState[id]);
+            applyPoiFilters();
+        });
+    });
 
-            // ─── High-Quality 3D Buildings ─────────────────
-            function add3DBuildings() {
-                if (map.getLayer('3d-buildings')) return;
-                
-                var srcName = getVectorSourceName();
-                
-                var checkBuildings = function() {
-                    try {
-                        map.addLayer({
-                            id: '3d-buildings',
-                            source: srcName,
-                            'source-layer': 'building',
-                            type: 'fill-extrusion',
-                            minzoom: CONFIG.BUILDINGS_MIN_ZOOM,
-                            maxzoom: 18,
-                            filter: [
-                                'all',
-                                ['!=', ['get', 'hide_3d'], true],
-                                ['<=', ['get', 'render_height'], CONFIG.MAX_BUILDING_HEIGHT]
-                            ],
-                            paint: {
-                                'fill-extrusion-color': [
-                                    'interpolate', ['linear'], ['get', 'render_height'],
-                                    0, '#e8e4d8',
-                                    30, '#ddd8cc',
-                                    60, '#d4cec0',
-                                    100, '#c8c2b4'
-                                ],
-                                'fill-extrusion-height': [
-                                    'interpolate', ['linear'], ['zoom'],
-                                    14, ['min', ['get', 'render_height'], 15],
-                                    15, ['min', ['get', 'render_height'], 30],
-                                    16, ['min', ['get', 'render_height'], 60],
-                                    17, ['get', 'render_height']
-                                ],
-                                'fill-extrusion-base': ['get', 'render_min_height'],
-                                'fill-extrusion-opacity': CONFIG.BUILDING_OPACITY,
-                                'fill-extrusion-vertical-gradient': true
-                            }
-                        }, getFirstSymbolLayer());
-                    } catch(e) {
-                        console.warn('3D buildings not available:', e);
-                    }
-                };
-                
-                if (map.loaded()) {
-                    checkBuildings();
-                } else {
-                    map.once('load', checkBuildings);
-                }
-            }
+    document.getElementById('btnAll').addEventListener('click', function() {
+        POI_GROUPS.forEach(function(g) { g.items.forEach(function(i) { poiState[i.id] = true; }); });
+        body.querySelectorAll('.poi-item').forEach(function(el) { el.classList.add('active'); });
+        applyPoiFilters();
+    });
+    document.getElementById('btnNone').addEventListener('click', function() {
+        POI_GROUPS.forEach(function(g) { g.items.forEach(function(i) { poiState[i.id] = false; }); });
+        body.querySelectorAll('.poi-item').forEach(function(el) { el.classList.remove('active'); });
+        applyPoiFilters();
+    });
 
-            // ─── Map Initialization ─────────────────────────
-            function initMap() {
-                setLoading(20);
-                
-                var mapOptions = {
-                    container: 'map',
-                    style: OFM_LIBERTY,
-                    center: POLAND_CENTER,
-                    zoom: INITIAL_ZOOM,
-                    pitch: INITIAL_PITCH,
-                    bearing: INITIAL_BEARING,
-                    antialias: !CONFIG.ENABLE_PERFORMANCE_MODE,
-                    maxBounds: [[10, 47], [28, 57]],
-                    minZoom: 4,
-                    maxZoom: CONFIG.ENABLE_PERFORMANCE_MODE ? 17 : 18,
-                    maxPitch: 75,
-                    fadeDuration: 0,
-                    trackResize: true
-                };
-                
-                if (CONFIG.ENABLE_PERFORMANCE_MODE) {
-                    mapOptions.preserveDrawingBuffer = false;
-                    mapOptions.failIfMajorPerformanceCaveat = false;
-                    mapOptions.pixelRatio = Math.min(window.devicePixelRatio, 2);
-                } else {
-                    mapOptions.canvasContextAttributes = { antialias: true };
-                }
-                
-                map = new maplibregl.Map(mapOptions);
-                setLoading(40);
+    // Collapse toggle
+    document.getElementById('poiHeader').addEventListener('click', function() {
+        document.getElementById('poiPanel').classList.toggle('collapsed');
+    });
+}
 
-                map.on('load', function () {
-                    setLoading(60);
-                    onStyleReady();
-                    setLoading(95);
-                    hideLoading();
-                    optimizeTileCache();
-                });
+// ── POI Filters — map layer visibility ──────────────────
+// We build a filter on the style's POI layers based on their `class` or `subclass` fields.
+// OpenFreeMap liberty style uses a layer called "poi" with class/subclass fields.
+var CLASS_MAP = {
+    // Transport
+    subway_station:   { class: 'railway', subclass: 'subway' },
+    bus_stop:         { class: 'bus' },
+    railway_station:  { class: 'railway', subclass: 'station' },
+    parking:          { class: 'parking' },
+    fuel:             { class: 'fuel' },
+    // Food
+    restaurant:  { class: 'restaurant' },
+    cafe:        { class: 'cafe' },
+    fast_food:   { class: 'fast_food' },
+    bar:         { class: 'bar' },
+    bakery:      { subclass: 'bakery' },
+    // Shopping
+    supermarket: { class: 'supermarket' },
+    mall:        { subclass: 'mall' },
+    pharmacy:    { class: 'pharmacy' },
+    clothes:     { subclass: 'clothes' },
+    electronics: { subclass: 'electronics' },
+    // Finance
+    bank:  { class: 'bank' },
+    atm:   { class: 'atm' },
+    // Health
+    hospital: { class: 'hospital' },
+    clinic:   { subclass: 'clinic' },
+    dentist:  { subclass: 'dentist' },
+    vet:      { subclass: 'veterinary' },
+    // Education
+    school:       { class: 'school' },
+    university:   { class: 'university' },
+    kindergarten: { class: 'kindergarten' },
+    library:      { subclass: 'library' },
+    // Entertainment
+    hotel:   { class: 'lodging' },
+    museum:  { class: 'museum' },
+    theatre: { class: 'theatre' },
+    cinema:  { subclass: 'cinema' },
+    park:    { class: 'park' },
+    sport:   { class: 'stadium' },
+    // Services
+    police:           { class: 'police' },
+    fire_station:     { class: 'fire_station' },
+    post_office:      { subclass: 'post_office' },
+    place_of_worship: { class: 'place_of_worship' },
+    toilet:           { class: 'toilet' },
+};
 
-                map.on('error', function (e) {
-                    console.warn('Map error:', e.error || e);
-                    hideLoading();
-                });
-            }
+function applyPoiFilters() {
+    if (!map || !map.isStyleLoaded()) return;
 
-            function onStyleReady() {
-                add3DBuildings();
-                enableFullRotation();
-                fixCrookedModels();
-                
-                if (CONFIG.ENABLE_PERFORMANCE_MODE) {
-                    var moveTimeout;
-                    map.on('movestart', function() {
-                        if (map.getLayer('3d-buildings')) {
-                            map.setPaintProperty('3d-buildings', 'fill-extrusion-opacity', 0.4);
-                        }
-                        if (moveTimeout) clearTimeout(moveTimeout);
-                    });
-                    
-                    map.on('moveend', function() {
-                        moveTimeout = setTimeout(function() {
-                            if (map.getLayer('3d-buildings')) {
-                                map.setPaintProperty('3d-buildings', 'fill-extrusion-opacity', CONFIG.BUILDING_OPACITY);
-                            }
-                        }, 500);
-                    });
-                }
-            }
+    // Build list of allowed classes/subclasses
+    var allowedClasses = [];
+    var allowedSubclasses = [];
 
-            function getFirstSymbolLayer() {
-                var layers = map.getStyle().layers || [];
-                for (var i = 0; i < layers.length; i++) {
-                    if (layers[i].type === 'symbol') return layers[i].id;
-                }
-                return undefined;
-            }
+    Object.keys(poiState).forEach(function(id) {
+        if (!poiState[id]) return;
+        var m = CLASS_MAP[id];
+        if (!m) return;
+        if (m.class && allowedClasses.indexOf(m.class) === -1) allowedClasses.push(m.class);
+        if (m.subclass && allowedSubclasses.indexOf(m.subclass) === -1) allowedSubclasses.push(m.subclass);
+    });
 
-            function getVectorSourceName() {
-                var sources = map.getStyle().sources;
-                if (sources['openmaptiles'] && sources['openmaptiles'].type === 'vector') return 'openmaptiles';
-                if (sources['openfreemap'] && sources['openfreemap'].type === 'vector') return 'openfreemap';
-                var keys = Object.keys(sources);
-                for (var i = 0; i < keys.length; i++) {
-                    if (sources[keys[i]].type === 'vector') return keys[i];
-                }
-                return 'openmaptiles';
-            }
+    var anyEnabled = Object.keys(poiState).some(function(id) { return poiState[id]; });
 
-            function fixCrookedModels() {
-                map.on('sourcedata', throttleRAF(function(e) {
-                    if (e.sourceId === getVectorSourceName() && e.sourceLayer === 'building') {
-                        try {
-                            if (map.style && map.style._tiles) {
-                                Object.keys(map.style._tiles).forEach(function(tileId) {
-                                    var tile = map.style._tiles[tileId];
-                                    if (tile && tile.data && (!tile.data.layers || tile.data.layers.length === 0)) {
-                                        delete map.style._tiles[tileId];
-                                    }
-                                });
-                            }
-                        } catch(err) {
-                            console.warn('Error fixing models:', err);
-                        }
-                    }
-                }));
-            }
+    // Apply to all POI-type layers in the style
+    var style = map.getStyle();
+    if (!style) return;
 
-            function optimizeTileCache() {
-                if (!map || !CONFIG.ENABLE_PERFORMANCE_MODE) return;
-                
-                setInterval(function() {
-                    if (map && map.style && map.style._tiles) {
-                        var tiles = map.style._tiles;
-                        var tilesCount = Object.keys(tiles || {}).length;
-                        if (tilesCount > CONFIG.MAX_TILE_CACHE_SIZE) {
-                            var toRemove = [];
-                            for (var id in tiles) {
-                                if (tiles[id] && tiles[id].timeAdded && 
-                                    (Date.now() - tiles[id].timeAdded > CONFIG.TILE_CACHE_CLEAN_INTERVAL)) {
-                                    toRemove.push(id);
-                                }
-                            }
-                            toRemove.forEach(function(id) {
-                                if (map.style._tiles[id]) {
-                                    delete map.style._tiles[id];
-                                }
-                            });
-                        }
-                    }
-                }, CONFIG.TILE_CACHE_CLEAN_INTERVAL);
-            }
+    style.layers.forEach(function(layer) {
+        if (layer.type !== 'symbol') return;
+        var src = layer['source-layer'];
+        if (src !== 'poi') return;
 
-            // ─── Reset Button ─────────────────────────────
-            function initResetButton() {
-                var resetBtn = qs('#resetBtn');
-                if (resetBtn) {
-                    resetBtn.addEventListener('click', function() {
-                        map.flyTo({
-                            center: POLAND_CENTER,
-                            zoom: INITIAL_ZOOM,
-                            pitch: INITIAL_PITCH,
-                            bearing: INITIAL_BEARING,
-                            duration: 2000
-                        });
-                    });
-                }
-            }
+        if (!anyEnabled) {
+            map.setFilter(layer.id, ['==', 'class', '__none__']);
+            return;
+        }
 
-            // ─── Boot ────────────────────────────────────────
-            function boot() {
-                if (typeof maplibregl === 'undefined') {
-                    console.error('MapLibre GL not loaded');
-                    return;
-                }
-                setLoading(10);
-                initMap();
-                initResetButton();
-            }
+        var conditions = ['any'];
+        if (allowedClasses.length) conditions.push(['in', ['get', 'class'], ['literal', allowedClasses]]);
+        if (allowedSubclasses.length) conditions.push(['in', ['get', 'subclass'], ['literal', allowedSubclasses]]);
 
-            if (document.readyState === 'loading') {
-                document.addEventListener('DOMContentLoaded', boot);
-            } else {
-                boot();
-            }
-        })();
-    </script>
+        if (conditions.length === 1) {
+            map.setFilter(layer.id, ['==', 'class', '__none__']);
+        } else {
+            map.setFilter(layer.id, conditions);
+        }
+    });
+}
+
+// ── 3D Buildings — Realistic Colors ─────────────────────
+function addBuildings() {
+    if (map.getLayer('3d-buildings')) return;
+
+    var sources = map.getStyle().sources;
+    var sourceName = sources.openmaptiles ? 'openmaptiles'
+                   : sources.openfreemap  ? 'openfreemap'
+                   : Object.keys(sources)[0];
+
+    var layers = map.getStyle().layers;
+    var firstSymbol;
+    for (var i = 0; i < layers.length; i++) {
+        if (layers[i].type === 'symbol') { firstSymbol = layers[i].id; break; }
+    }
+
+    // Google Maps-like building colours: light warm beige → terracotta for tall
+    map.addLayer({
+        id: '3d-buildings',
+        source: sourceName,
+        'source-layer': 'building',
+        type: 'fill-extrusion',
+        minzoom: 14,
+        filter: ['all',
+            ['!=', ['get', 'hide_3d'], true],
+            ['>', ['coalesce', ['get', 'render_height'], 0], 0]
+        ],
+        paint: {
+            // Realistic Google Maps-style palette: low=warm beige, medium=sand, tall=terracotta
+            'fill-extrusion-color': [
+                'interpolate', ['linear'], ['coalesce', ['get', 'render_height'], 5],
+                0,   '#e8e0d8',   // very low — off-white
+                5,   '#ddd5c8',   // 1-2 floor — warm beige
+                15,  '#d0c4b2',   // 3-5 floor — sand
+                30,  '#c4b49e',   // mid-rise — warm tan
+                60,  '#b8a88e',   // high-rise — khaki
+                120, '#a89070'    // skyscraper — terracotta
+            ],
+            'fill-extrusion-height': ['coalesce', ['get', 'render_height'], 5],
+            'fill-extrusion-base':   ['coalesce', ['get', 'render_min_height'], 0],
+            'fill-extrusion-opacity': 1,
+            'fill-extrusion-vertical-gradient': true
+        }
+    }, firstSymbol);
+}
+
+// ── 360° Rotation ────────────────────────────────────────
+function enableRotation() {
+    var dragging = false, lastX = 0;
+
+    map.on('mousedown', function(e) {
+        // Right button (2) or middle (1)
+        if (e.originalEvent.button === 1 || e.originalEvent.button === 2) {
+            dragging = true;
+            lastX = e.point.x;
+            stopAutoRotate();
+            e.originalEvent.preventDefault();
+        }
+    });
+    map.on('mousemove', function(e) {
+        if (!dragging) return;
+        var dx = e.point.x - lastX;
+        map.setBearing(map.getBearing() + dx * 0.22);
+        lastX = e.point.x;
+    });
+    window.addEventListener('mouseup', function() { dragging = false; });
+
+    // Prevent right-click context menu on map
+    document.getElementById('map').addEventListener('contextmenu', function(e) { e.preventDefault(); });
+
+    document.addEventListener('keydown', function(e) {
+        if (e.code === 'Space') { e.preventDefault(); toggleAutoRotate(); }
+    });
+}
+
+function toggleAutoRotate() {
+    if (rotationId) { stopAutoRotate(); return; }
+    var last = null;
+    function frame(t) {
+        if (last) map.setBearing(map.getBearing() + (t - last) / 1000 * 8);
+        last = t;
+        rotationId = requestAnimationFrame(frame);
+    }
+    rotationId = requestAnimationFrame(frame);
+}
+
+function stopAutoRotate() {
+    if (rotationId) { cancelAnimationFrame(rotationId); rotationId = null; }
+}
+
+// ── Init ─────────────────────────────────────────────────
+function init() {
+    setLoading(15);
+
+    map = new maplibregl.Map({
+        container: 'map',
+        style: STYLE_URL,
+        center: CENTER,
+        zoom: INIT_ZOOM,
+        pitch: INIT_PITCH,
+        bearing: INIT_BEARING,
+        antialias: true,          // smoother edges on buildings
+        maxZoom: 19,
+        maxPitch: 75,
+        pixelRatio: Math.min(window.devicePixelRatio, 2), // stable, no flicker
+        fadeDuration: 0,           // kills texture shimmer on zoom
+        trackResize: true,
+        preserveDrawingBuffer: false,
+        // Disable map rotation via drag (we override with RMB only)
+        dragRotate: false
+    });
+
+    // Re-enable pitch with touch
+    map.touchPitch.enable();
+
+    map.on('load', function() {
+        setLoading(70);
+        addBuildings();
+        enableRotation();
+        applyPoiFilters();
+        setLoading(100);
+        hideLoading();
+    });
+
+    map.on('error', function(e) {
+        console.warn('Map error:', e.error);
+        hideLoading();
+    });
+
+    // Reset button
+    document.getElementById('resetBtn').addEventListener('click', function() {
+        stopAutoRotate();
+        map.flyTo({ center: CENTER, zoom: INIT_ZOOM, pitch: INIT_PITCH, bearing: INIT_BEARING, duration: 1800 });
+    });
+}
+
+// ── Boot ─────────────────────────────────────────────────
+buildPoiPanel();
+
+function tryLoad(cb) {
+    if (typeof maplibregl !== 'undefined') { cb(); return; }
+    // Fallback: try unpkg
+    var s = document.createElement('script');
+    s.src = 'https://unpkg.com/maplibre-gl@5.2.0/dist/maplibre-gl.js';
+    s.onload = function() {
+        var l = document.createElement('link');
+        l.rel = 'stylesheet';
+        l.href = 'https://unpkg.com/maplibre-gl@5.2.0/dist/maplibre-gl.css';
+        document.head.appendChild(l);
+        setTimeout(cb, 100);
+    };
+    s.onerror = function() { console.error('MapLibre failed to load from all CDNs'); };
+    document.head.appendChild(s);
+}
+
+function boot() {
+    tryLoad(function() {
+        if (typeof maplibregl === 'undefined') {
+            console.error('MapLibre GL not loaded');
+            return;
+        }
+        init();
+    });
+}
+
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', boot);
+} else {
+    boot();
+}
+
+})();
+</script>
 </body>
 </html>
